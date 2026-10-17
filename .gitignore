@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Training logs and temporary checkpoints
+logs/
+tensorboard/
+runs/
+*.tmp
+
+# Keep final results, but exclude large training artifacts by default
+results/*.pkl
+results/*.pth
+results/*.pt
+results/*.ckpt
