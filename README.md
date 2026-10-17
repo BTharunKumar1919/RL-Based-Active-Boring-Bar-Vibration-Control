@@ -22,9 +22,10 @@ These are results from the included model and evaluation grid, not evidence of r
 
 The plant is a single-degree-of-freedom mass–spring–damper surrogate:
 
-\[
- m\ddot q + c\dot q + kq = F_{disturbance} + F_{control}.
-\]
+$$
+m\ddot{q} + c\dot{q} + kq
+= F_{\text{disturbance}} + F_{\text{control}}
+$$
 
 - The nominal natural frequency is set to 174 Hz and damping ratio to 0.012.
 - Modal mass is set to 1 kg as a normalization assumption, not a measured modal mass.
