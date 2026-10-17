@@ -70,6 +70,17 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+## Setup (macOS and Linux)
+
+Run these commands from the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
+```
+
 ## Run the project
 
 ### 1. Run a short smoke test
