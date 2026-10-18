@@ -59,9 +59,30 @@ results/                     # saved model, CSVs and figures
 - Python 3.10 or 3.11 recommended
 - Packages listed in `requirements.txt`
 
-## Setup (Windows CMD)
+## Forking and Contributing
 
-Run these commands from the repository root:
+If you would like to experiment with this project or contribute improvements, you can fork the repository and work on your own copy.
+
+### 1. Fork the Repository
+
+1. Open this repository on GitHub.
+2. Click **Fork** in the upper-right corner.
+3. Select your GitHub account as the destination and create the fork.
+
+This creates a copy of the repository under your own GitHub account.
+
+### 2. Clone Your Fork
+
+Replace `YOUR-USERNAME` with your GitHub username:
+
+```bash
+git clone https://github.com/YOUR-USERNAME/RL-Based-Active-Boring-Bar-Vibration-Control.git
+cd RL-Based-Active-Boring-Bar-Vibration-Control
+```
+
+### 3. Set Up the Environment
+
+**Windows (CMD):**
 
 ```bat
 python -m venv .venv
@@ -70,9 +91,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## Setup (macOS and Linux)
-
-Run these commands from the repository root:
+**macOS and Linux:**
 
 ```bash
 python3 -m venv .venv
@@ -80,6 +99,52 @@ source .venv/bin/activate
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
+
+### 4. Create a Branch
+
+Create a separate branch for your changes:
+
+```bash
+git checkout -b feature/your-improvement
+```
+
+### 5. Commit and Push Your Changes
+
+After making and testing your changes:
+
+```bash
+git add .
+git commit -m "Describe your changes"
+git push -u origin feature/your-improvement
+```
+
+### 6. Submit a Pull Request
+
+1. Open your fork on GitHub.
+2. Select **Contribute** or **Compare & pull request**, if available.
+3. Set the original repository as the base repository and your fork as the head repository.
+4. Describe your changes and submit the pull request for review.
+
+### Keeping Your Fork Updated
+
+To fetch updates from the original repository, add it as an upstream remote:
+
+```bash
+git remote add upstream https://github.com/hirithik15/RL-Based-Active-Boring-Bar-Vibration-Control.git
+git fetch upstream
+git checkout main
+git merge upstream/main
+```
+
+If you have already added `upstream`, do not add it again. Use `git remote -v` to inspect your configured remotes.
+
+### Contribution Guidelines
+
+- Keep changes relevant to the project.
+- Test changes before submitting a pull request.
+- Document new parameters, dependencies, and experimental assumptions.
+- Do not present simulation results as experimental validation on physical machinery.
+- Include updated evaluation results when modifying controller behaviour or training configurations.
 
 ## Run the project
 
