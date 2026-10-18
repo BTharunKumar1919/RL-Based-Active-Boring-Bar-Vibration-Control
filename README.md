@@ -1,237 +1,351 @@
-# Active Vibration Control of a Rotary Boring Bar (Simulation)
+# Active Vibration Control of a Rotary Boring Bar
 
-A modular Python project comparing **no active control**, a **PID controller**, and a **Soft Actor-Critic (SAC)** reinforcement-learning controller on a simplified boring-bar vibration model. The project was developed for an AI in Manufacturing course project.
+A modular Python simulation project comparing **No Control**, a **PID controller**, and a **Soft Actor-Critic (SAC)** reinforcement-learning controller for active vibration suppression in a simplified rotary boring-bar model.
 
-> **Scope:** this is a simulation study using an assumed single-mode oscillator. It is not a physically identified boring-bar model, a validated digital twin, or an experimental demonstration of chatter suppression.
+The project includes a simulation environment, reinforcement-learning training and evaluation scripts, a FastAPI backend, and an interactive Streamlit dashboard.
+
+> **Scope:** This is an educational simulation using an assumed single-mode oscillator. It is not an experimentally identified boring-bar model, a validated digital model, or a demonstration of chatter suppression on physical machinery.
+
+## Features
+
+- **Three-controller comparison:** No Control, PID, and SAC.
+- **Reinforcement learning:** Train and evaluate a SAC policy using Stable-Baselines3.
+- **Robustness evaluation:** Compare controllers across a deterministic grid of disturbance amplitudes, frequencies, and phases.
+- **Interactive dashboard:** Explore displacement, velocity, disturbance force, control force, vibration metrics, and actuator effort.
+- **REST API:** Run individual simulations and compare controllers using FastAPI.
+- **Exportable results:** Download simulation time series and controller metrics as CSV files.
+- **Reproducible configuration:** Centralized plant, training, disturbance, and evaluation settings.
 
 ## Results at a glance
 
-The included `results/robust_evaluation_summary.csv` reports the current 84-condition evaluation:
+The included `results/robust_evaluation_summary.csv` reports the current 84-condition evaluation.
 
-| Controller | Mean steady-state RMS vibration | Mean reduction vs. no control | Conditions improved |
+| Controller | Mean steady-state RMS vibration | Mean reduction vs. No Control | Conditions improved |
 |---|---:|---:|---:|
-| No control | 4.962 µm | 0.00% | Baseline |
+| No Control | 4.962 µm | 0.00% | Baseline |
 | PID | 3.761 µm | 4.64% | 42.9% (36/84) |
 | SAC | 3.410 µm | 14.10% | 100% (84/84) |
 
-For the 24 conditions with disturbance frequencies outside the training range (205 and 215 Hz), the mean reduction was **6.82% for SAC** and **−6.55% for PID**. Negative reduction means vibration was higher than the no-control baseline.
+For the 24 conditions with disturbance frequencies outside the SAC training range (205 and 215 Hz), the mean reduction was **6.82% for SAC** and **−6.55% for PID**. Negative reduction means vibration was higher than the No Control baseline.
 
-These are results from the included model and evaluation grid, not evidence of real-machine performance. They are based on one saved SAC policy and one deterministic test grid; repeat-seed and physical validation remain future work. Results may change if the model is retrained or the scripts/configuration are changed.
+These results describe the included simulation and evaluation grid. They do not establish real-machine performance. The results use one saved SAC policy and one deterministic test grid; multi-seed and physical validation remain future work. Results can change if the model, configuration, controller, or training process changes.
+
+## System architecture
+
+```text
+                    Simulation configuration
+                              |
+                              v
+                   Single-mode plant model
+                              |
+                 Harmonic disturbance input
+                              |
+             +----------------+----------------+
+             |                |                |
+             v                v                v
+         No Control          PID              SAC
+             |                |                |
+             +----------------+----------------+
+                              |
+                              v
+                    Simulation time series
+                              |
+                              v
+                   Performance calculations
+                              |
+                    +---------+---------+
+                    |                   |
+                    v                   v
+                FastAPI API       Streamlit UI
+                    |                   |
+                    +---------+---------+
+                              |
+                   Plots, metrics and CSVs
+```
+
+The dashboard sends requests to the API. The API calls the shared simulation service, which uses the existing plant and controller implementation. SAC inference loads a saved model; it does not train the policy during dashboard requests.
 
 ## Model and assumptions
 
 The plant is a single-degree-of-freedom mass–spring–damper surrogate:
 
 $$
-m\ddot{q} + c\dot{q} + kq
-= F_{\text{disturbance}} + F_{\text{control}}
+m\ddot{q}+c\dot{q}+kq
+=F_{\text{disturbance}}+F_{\text{control}}
 $$
 
-- The nominal natural frequency is set to 174 Hz and damping ratio to 0.012.
-- Modal mass is set to 1 kg as a normalization assumption, not a measured modal mass.
-- The simulation time step is 0.0001 s (10 kHz update rate).
-- Maximum generalized control force is assumed to be ±2 N; this is not a measured actuator rating.
-- Disturbance is sinusoidal. It does **not** represent regenerative chatter or a complete cutting-process model.
-- The state coordinate is a modal coordinate. A calibrated mode-shape factor would be needed to infer physical tool-tip displacement.
-- The code uses semi-implicit Euler integration.
-- The controller has access to the simulated displacement and velocity states; the current Python project does not implement a Kalman filter or noisy sensor model.
+Current assumptions:
 
-The 174 Hz value should be treated as a working modelling assumption unless and until its source and applicability to the target boring bar are verified.
+- Nominal natural frequency: 174 Hz.
+- Damping ratio: 0.012.
+- Modal mass: 1 kg, used as a normalization assumption rather than a measured modal mass.
+- Simulation time step: 0.0001 s, corresponding to a 10 kHz simulation update rate.
+- Maximum generalized control force: ±2 N, an assumed limit rather than a measured actuator rating.
+- Disturbance: sinusoidal force, not a regenerative chatter or complete cutting-process model.
+- Integration: semi-implicit Euler.
+- The simulated state coordinate is modal displacement. A calibrated mode-shape factor is needed to infer physical tool-tip displacement.
+
+The 174 Hz natural frequency should be treated as a working assumption until its source and applicability to the target boring bar are verified.
+
+### Current noise and uncertainty limitations
+
+The current baseline simulation does **not** implement:
+
+- Sensor measurement noise.
+- Randomized plant parameters within each simulation run.
+- A Kalman filter or other state estimator.
+- Randomly varying cutting-force dynamics.
+- Real actuator bandwidth, delay, slew-rate limits, or force-current calibration.
+
+The dashboard currently plots the deterministic simulated response for the selected operating condition. Noise and uncertainty modelling are planned extensions, not existing capabilities.
 
 ## Repository layout
 
 ```text
-config.py                  # plant, disturbance, training and evaluation settings
-models.py                  # single-mode plant and sinusoidal disturbance
-controllers.py              # no-control and PID controllers
-env.py                      # Gymnasium environment for SAC
-sac_training.py              # SAC model construction and training
-experiments.py               # nominal/unseen tests, metrics and plots
-run_baseline.py              # training + standard comparison entry point
-tune_pid.py                  # grid search for PID gains
-robust_evaluation.py         # 84-condition controller comparison
-requirements.txt             # Python dependencies
-results/                     # saved model, CSVs and figures
+.
+├── config.py
+├── models.py
+├── controllers.py
+├── env.py
+├── sac_training.py
+├── experiments.py
+├── run_baseline.py
+├── tune_pid.py
+├── robust_evaluation.py
+├── deployment_service.py
+├── api.py
+├── app.py
+├── requirements.txt
+├── README.md
+└── results/
+    ├── sac_vibration_model.zip
+    ├── robust_evaluation_by_condition.csv
+    ├── robust_evaluation_summary.csv
+    └── figures and other evaluation outputs
 ```
+
+`results/` may contain additional CSV files, plots, and saved model files depending on which scripts have been run.
+
+### Main modules
+
+| File | Purpose |
+|---|---|
+| `config.py` | Plant, disturbance, training, and evaluation configuration |
+| `models.py` | Single-mode plant and sinusoidal disturbance |
+| `controllers.py` | No Control and PID controllers |
+| `env.py` | Gymnasium environment used for SAC training |
+| `sac_training.py` | SAC model construction and training |
+| `experiments.py` | Controller simulation, metrics, and standard experiments |
+| `run_baseline.py` | Training and standard comparison entry point |
+| `tune_pid.py` | PID gain grid search |
+| `robust_evaluation.py` | Deterministic 84-condition evaluation |
+| `deployment_service.py` | Shared simulation service for API requests |
+| `api.py` | FastAPI endpoints |
+| `app.py` | Streamlit interactive dashboard |
+| `requirements.txt` | Python dependencies |
 
 ## Requirements
 
-- Python 3.10 or 3.11 recommended
-- Packages listed in `requirements.txt`
+- Python 3.10 or 3.11 recommended.
+- Dependencies listed in `requirements.txt`.
+- The saved SAC model file is required for SAC inference.
+- The API and dashboard run locally by default.
 
-## Forking and Contributing
+## Installation
 
-If you would like to experiment with this project or contribute improvements, you can fork the repository and work on your own copy.
+Run these commands from the project directory.
 
-### 1. Fork the Repository
+### Windows CMD
 
-1. Open this repository on GitHub.
-2. Click **Fork** in the upper-right corner.
-3. Select your GitHub account as the destination and create the fork.
-
-This creates a copy of the repository under your own GitHub account.
-
-### 2. Clone Your Fork
-
-Replace `YOUR-USERNAME` with your GitHub username:
-
-```bash
-git clone https://github.com/YOUR-USERNAME/RL-Based-Active-Boring-Bar-Vibration-Control.git
-cd RL-Based-Active-Boring-Bar-Vibration-Control
-```
-
-### 3. Set Up the Environment
-
-**Windows (CMD):**
+Create a virtual environment if one does not already exist:
 
 ```bat
 python -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
 ```
 
-**macOS and Linux:**
+Install the dependencies:
+
+```bat
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Using `.venv\Scripts\python.exe` explicitly helps ensure packages are installed into and executed from the project's virtual environment.
+
+### macOS and Linux
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
 ```
-
-### 4. Create a Branch
-
-Create a separate branch for your changes:
-
-```bash
-git checkout -b feature/your-improvement
-```
-
-### 5. Commit and Push Your Changes
-
-After making and testing your changes:
-
-```bash
-git add .
-git commit -m "Describe your changes"
-git push -u origin feature/your-improvement
-```
-
-### 6. Submit a Pull Request
-
-1. Open your fork on GitHub.
-2. Select **Contribute** or **Compare & pull request**, if available.
-3. Set the original repository as the base repository and your fork as the head repository.
-4. Describe your changes and submit the pull request for review.
-
-### Keeping Your Fork Updated
-
-To fetch updates from the original repository, add it as an upstream remote:
-
-```bash
-git remote add upstream https://github.com/hirithik15/RL-Based-Active-Boring-Bar-Vibration-Control.git
-git fetch upstream
-git checkout main
-git merge upstream/main
-```
-
-If you have already added `upstream`, do not add it again. Use `git remote -v` to inspect your configured remotes.
-
-### Contribution Guidelines
-
-- Keep changes relevant to the project.
-- Test changes before submitting a pull request.
-- Document new parameters, dependencies, and experimental assumptions.
-- Do not present simulation results as experimental validation on physical machinery.
-- Include updated evaluation results when modifying controller behaviour or training configurations.
 
 ## Run the project
 
-### 1. Run a short smoke test
+### 1. Train the SAC policy and run standard experiments
 
-This trains a small model and runs the standard experiments. It overwrites the default saved model and standard result files, so back up results first if you want to keep the current outputs.
-
-```bat
-python run_baseline.py --timesteps 10000
-```
-
-### 2. Train for 100,000 timesteps
+A short smoke test:
 
 ```bat
-python run_baseline.py --timesteps 100000 --seed 42
+.venv\Scripts\python.exe run_baseline.py --timesteps 10000
 ```
 
-`run_baseline.py` defaults to **300,000 timesteps** if `--timesteps` is omitted. Training saves the model to `results/sac_vibration_model.zip`, then runs the standard nominal and unseen-condition experiments. Training again with the same path overwrites the model file.
-
-### 3. Evaluate the saved model across 84 conditions
-
-After training, run:
+A longer training run:
 
 ```bat
-python robust_evaluation.py
+.venv\Scripts\python.exe run_baseline.py --timesteps 100000 --seed 42
 ```
 
-This loads `results/sac_vibration_model.zip` and evaluates No control, PID and SAC over 84 combinations:
+If `--timesteps` is omitted, `run_baseline.py` defaults to 300,000 timesteps. Training saves the policy to `results/sac_vibration_model.zip` and runs the standard experiments.
 
-- Disturbance amplitudes: 0.5, 1.0 and 1.5 N
-- Disturbance frequencies: 150, 160, 174, 185, 200, 205 and 215 Hz
-- Disturbance phases: 0, π/2, π and 3π/2 radians
+**Warning:** Training can overwrite the existing model and standard result files. Back up any results you want to preserve before retraining.
 
-The evaluation duration is 0.2 s per condition. Steady-state RMS vibration is calculated over the final 80% of each simulated record. The frequency groups are labelled within-range (150–200 Hz) and outside-range (205–215 Hz), relative to the training frequency range configured in `config.py`.
-
-Generated outputs:
-
-- `results/robust_evaluation_by_condition.csv` — per-condition metrics
-- `results/robust_evaluation_summary.csv` — aggregated metrics
-- `results/robust_evaluation_rms.png` — RMS vibration plot
-- `results/robust_evaluation_reduction.png` — reduction vs. no-control plot
-
-### 4. Tune PID gains (optional)
+### 2. Evaluate the saved policy over 84 conditions
 
 ```bat
-python tune_pid.py
+.venv\Scripts\python.exe robust_evaluation.py
 ```
 
-This runs a grid search and writes `results/pid_tuning_results.csv`. It overwrites that file if it already exists. The robust evaluation uses fixed gains (`Kp = 50000`, `Ki = 0`, `Kd = 20`) so PID is not retuned on the 84 evaluation conditions.
+The evaluation compares No Control, PID, and SAC across:
 
-### 5. Run syntax checks
+- Disturbance amplitudes: 0.5, 1.0, and 1.5 N.
+- Disturbance frequencies: 150, 160, 174, 185, 200, 205, and 215 Hz.
+- Disturbance phases: 0, π/2, π, and 3π/2 radians.
+
+This gives 3 × 7 × 4 = 84 conditions per controller.
+
+Each condition runs for 0.2 seconds. Steady-state RMS vibration is calculated over the final 80% of the simulated record. Frequencies from 150–200 Hz are within the configured SAC training range; 205 and 215 Hz are outside it.
+
+Outputs include:
+
+- `results/robust_evaluation_by_condition.csv`
+- `results/robust_evaluation_summary.csv`
+- `results/robust_evaluation_rms.png`
+- `results/robust_evaluation_reduction.png`
+
+### 3. Start the FastAPI backend
+
+In the first terminal:
 
 ```bat
-python -m py_compile config.py models.py controllers.py env.py sac_training.py experiments.py run_baseline.py tune_pid.py robust_evaluation.py
+.venv\Scripts\python.exe -m uvicorn api:app --reload
 ```
 
-## Main output files
+The default local API address is:
 
-- `results/controller_metrics.csv` — nominal and unseen-condition controller metrics
-- `results/controller_timeseries.csv` — time-series data for standard experiments
-- `results/pid_tuning_results.csv` — PID grid-search results
-- `results/robust_evaluation_by_condition.csv` and `results/robust_evaluation_summary.csv` — robustness evaluation
-- `results/*.png` — plots generated by the experiments
-- `results/sac_vibration_model.zip` — saved SAC policy used by the included evaluation, if included in the repository
+`http://127.0.0.1:8000`
 
-Running training or evaluation may overwrite output files. Copy the `results` directory before a new run if you need to preserve a particular model/result set. The CSVs and plots are snapshots; they will only correspond to a given model if they were generated using that model.
+Interactive API documentation:
 
-## Interpretation and limitations
+`http://127.0.0.1:8000/docs`
 
-- A test condition outside the training frequency range is not the same as testing on a different physical machine or validating against real cutting data.
-- The 84 test cases are a deterministic grid, not 84 independent physical experiments.
-- The reported percentage improved counts conditions where the controller's steady-state RMS was lower than the no-control result for the same condition. It does not measure statistical significance.
-- A single training seed is insufficient to establish that performance is repeatable. Evaluate multiple seeds and report variation before making strong claims.
-- PID and SAC use the simulated state variables in this implementation. No Kalman estimator is included in these modular scripts.
-- The actuator is an ideal force source; actuator bandwidth, delay, force-current calibration, and slew-rate constraints are not modelled.
+Available endpoints:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/` | API information |
+| `GET` | `/health` | Service and SAC model status |
+| `GET` | `/model` | Saved-model availability |
+| `POST` | `/simulate` | Simulate one controller |
+| `POST` | `/compare` | Compare all three controllers |
+
+The API validates request parameters and returns simulation metrics and time-series data. It is intended for local educational use and is not a safety-certified industrial control API.
+
+### 4. Start the Streamlit dashboard
+
+Keep the FastAPI server running. Open a second terminal in the project directory:
+
+```bat
+.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+Streamlit prints a local URL in the terminal, usually:
+
+`http://localhost:8501`
+
+The dashboard allows you to:
+
+- Set disturbance amplitude, frequency, phase, and duration.
+- Run No Control, PID, and SAC under the same selected disturbance condition.
+- Compare displacement and velocity time histories.
+- Inspect disturbance force and controller force.
+- Compare steady-state RMS, overall RMS, peak displacement, RMS force, peak force, and actuator saturation.
+- See percentage steady-state RMS reduction relative to No Control.
+- Identify whether the selected frequency lies inside or outside the SAC training range.
+- Download individual controller traces, all traces, and comparison metrics as CSV files.
+
+The dashboard communicates with the API at `http://127.0.0.1:8000` by default. The API URL can be changed in the dashboard sidebar.
+
+### 5. Tune PID gains (optional)
+
+```bat
+.venv\Scripts\python.exe tune_pid.py
+```
+
+This runs the configured grid search and writes `results/pid_tuning_results.csv`. It overwrites that file if it already exists.
+
+The robust evaluation uses fixed PID gains (`Kp = 50000`, `Ki = 0`, `Kd = 20`); PID is not retuned separately for each of the 84 evaluation conditions.
+
+### 6. Run syntax checks
+
+```bat
+.venv\Scripts\python.exe -m py_compile config.py models.py controllers.py env.py sac_training.py experiments.py run_baseline.py tune_pid.py robust_evaluation.py deployment_service.py api.py app.py
+```
+
+## Interpreting the metrics
+
+- **Steady-state RMS vibration:** RMS displacement over the configured steady-state portion of the response.
+- **Overall RMS vibration:** RMS over the full simulated response.
+- **Peak vibration:** Maximum absolute displacement.
+- **RMS control force:** Root-mean-square generalized force commanded by the controller.
+- **Peak control force:** Maximum absolute generalized control force.
+- **Actuator saturation fraction:** Fraction of samples at the actuator force limit.
+- **RMS reduction:** Percentage reduction relative to the matched No Control condition.
+
+\[
+\text{RMS reduction}(\%) =
+100\left(1-\frac{\mathrm{RMS}_{\mathrm{controller}}}
+{\mathrm{RMS}_{\mathrm{no\ control}}}\right)
+\]
+
+Positive values indicate lower RMS vibration than No Control; negative values indicate worse performance.
+
+A lower vibration metric does not automatically imply a better practical controller. Control effort, saturation, robustness, and the validity of the plant model must also be considered.
+
+## Limitations and interpretation
+
+- A frequency outside the training range is not equivalent to validation on a different physical machine.
+- The 84 conditions form a deterministic grid, not 84 independent physical experiments.
+- The reported improved-condition percentage is not a statistical significance test.
+- A single training seed is insufficient to establish reproducibility.
+- The modular scripts use simulated displacement and velocity states; they do not include a Kalman estimator or noisy sensor model.
+- The actuator is an ideal generalized force source. Bandwidth, delay, slew rate, and force-current calibration are not modelled.
+- The dashboard shows simulation results only. It does not connect to physical sensors, actuators, or a live boring-bar machine.
 - No hardware or real machining tests are included.
 
 ## Future work
 
-1. Verify model parameters using measured frequency-response/modal data from the target boring bar.
-2. Add a regenerative chatter model and cutting-process dynamics.
-3. Model actuator bandwidth, delays, limits and force-current calibration.
-4. Add sensor noise and a state estimator if required by the intended control architecture.
-5. Compare controllers under matched information and tuning budgets.
-6. Repeat training across several random seeds and evaluate on additional held-out conditions.
-7. Validate against experimental measurements before making real-machine performance claims.
+1. Verify model parameters using measured modal or frequency-response data from the target boring bar.
+2. Add sensor noise and randomized plant parameters, with repeatable random seeds.
+3. Train and evaluate SAC under realistic observation noise if the intended deployment includes noisy sensors.
+4. Add a regenerative chatter model and cutting-process dynamics.
+5. Model actuator bandwidth, delays, limits, and force-current calibration.
+6. Compare PID and SAC under matched tuning and information budgets.
+7. Repeat training across multiple random seeds and report uncertainty in evaluation results.
+8. Validate the simulation against experimental measurements before making physical performance claims.
 
-## Reproducibility note
+## Reproducibility
 
-The scripts, settings, saved policy and result files in this repository represent one snapshot of the project. To reproduce the reported numbers, use the included saved model with `python robust_evaluation.py` and retain the same source/configuration files. Retraining creates a new model and can produce different results.
+The saved model, source files, configuration, and result files represent a particular project snapshot. To reproduce the included robust-evaluation results, use the saved `results/sac_vibration_model.zip` with the matching source and configuration files:
+
+```bat
+.venv\Scripts\python.exe robust_evaluation.py
+```
+
+Retraining the model may change results. Keep a copy of the model and associated CSV outputs if you need to preserve a specific experiment.
+
+## Contributing
+
+Contributions are welcome. Keep changes relevant to the project, test them before submission, document new dependencies and modelling assumptions, and update evaluation results when changing controller behaviour or training configurations.
+
+Do not present simulation results as experimental validation on physical machinery.

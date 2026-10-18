@@ -1,6 +1,14 @@
 numpy
 pandas
+scipy
 matplotlib
 gymnasium
 stable-baselines3
+torch
 tensorboard
+plotly
+fastapi
+uvicorn[standard]
+pydantic
+streamlit
+requests
