@@ -1,264 +1,560 @@
+"""Robust evaluation of No Control, PID, and SAC."""
 
-"""Compare No control, tuned PID, and SAC across 84 test conditions."""
-
+from collections import deque
 from pathlib import Path
-import math
 
 import matplotlib
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
 from stable_baselines3 import SAC
 
-from config import PLANT, TRAINING, DisturbanceConfig
-from controllers import NoControl, PIDController
-from models import SingleModePlant, SinusoidalCuttingForce
+from config import (
+    PLANT,
+    TRAINING,
+)
+
+from models import (
+    SevenModePlant,
+    SinusoidalCuttingForce,
+)
+
+from controllers import (
+    NoControl,
+    PIDController,
+)
 
 
-# Keep PID fixed throughout testing; do not tune on the test conditions.
-KP, KI, KD = 50000.0, 0.0, 20.0
-MODEL_PATH = Path("results/sac_vibration_model.zip")
-OUT = Path("results")
+AMPLITUDES_N = (
+    0.5,
+    1.0,
+    1.5,
+)
+
+FREQUENCIES_HZ = (
+    150.0,
+    160.0,
+    174.0,
+    185.0,
+    200.0,
+    205.0,
+    215.0,
+)
+
+PHASES_RAD = (
+    0.0,
+    np.pi / 2.0,
+    np.pi,
+    3.0 * np.pi / 2.0,
+)
+
 DURATION_S = 0.2
-STEADY_FRACTION = 0.20
-
-AMPLITUDES = [0.5, 1.0, 1.5]
-FREQUENCIES = [150, 160, 174, 185, 200, 205, 215]
-PHASES = [0, math.pi / 2, math.pi, 3 * math.pi / 2]
 
 
-def make_conditions():
-    """84 combinations: 3 amplitudes x 7 frequencies x 4 phases."""
-    result = []
-    for amplitude in AMPLITUDES:
-        for frequency in FREQUENCIES:
-            for phase in PHASES:
-                result.append({
-                    "amplitude_n": amplitude,
-                    "frequency_hz": frequency,
-                    "phase_rad": phase,
-                    "frequency_group": (
-                        "within_training_range"
-                        if TRAINING.force_frequency_min_hz
-                        <= frequency <= TRAINING.force_frequency_max_hz
-                        else "outside_training_range"
-                    ),
-                })
-    return result
+def make_sac_observation(
+    plant,
+    history,
+):
+    """Build the same observation used during SAC training."""
+
+    state = plant.state
+
+    current_observation = np.asarray(
+        [
+            state.displacement_m
+            / TRAINING.displacement_scale_m,
+
+            state.velocity_m_s
+            / TRAINING.velocity_scale_m_s,
+
+            plant.actual_current_a
+            / PLANT.continuous_current_limit_a,
+        ],
+        dtype=np.float32,
+    )
+
+    history.append(
+        current_observation
+    )
+
+    if len(history) < (
+        TRAINING.observation_history_length
+    ):
+
+        first = history[0]
+
+        while len(history) < (
+            TRAINING.observation_history_length
+        ):
+
+            history.appendleft(
+                first.copy()
+            )
+
+    return np.concatenate(
+        list(history)
+    ).astype(np.float32)
 
 
-def simulate(name, condition, sac=None):
-    plant = SingleModePlant(PLANT)
-    plant.reset(0.0, 0.0)
+def simulate(
+    controller_name,
+    disturbance,
+    model=None,
+):
+    """Simulate one controller."""
 
-    disturbance = SinusoidalCuttingForce(DisturbanceConfig(
-        amplitude_n=condition["amplitude_n"],
-        frequency_hz=condition["frequency_hz"],
-        phase_rad=condition["phase_rad"],
-    ))
+    plant = SevenModePlant(
+        PLANT
+    )
 
-    pid = None
-    if name == "PID":
-        pid = PIDController(
-            kp=KP, ki=KI, kd=KD, plant_config=PLANT
+    plant.reset()
+
+    force_model = (
+        SinusoidalCuttingForce(
+            disturbance
         )
-        pid.reset()
+    )
 
-    n = round(DURATION_S / PLANT.dt_s)
-    steady_start = int(n * STEADY_FRACTION)
-    x = np.zeros(n)
-    u = np.zeros(n)
-    previous_action = 0.0
+    if controller_name == "No control":
 
-    for i in range(n):
+        controller = NoControl()
+
+    elif controller_name == "PID":
+
+        controller = PIDController(
+            plant_config=PLANT
+        )
+
+    elif controller_name == "SAC":
+
+        if model is None:
+            raise ValueError(
+                "SAC model is required."
+            )
+
+        controller = None
+
+    else:
+
+        raise ValueError(
+            f"Unknown controller: "
+            f"{controller_name}"
+        )
+
+    if controller is not None:
+        controller.reset()
+
+    dt = PLANT.dt_s
+
+    action_repeat = (
+        TRAINING.sac_action_repeat
+    )
+
+    n_steps = int(
+        round(
+            DURATION_S / dt
+        )
+    )
+
+    records = []
+
+    history = deque(
+        maxlen=TRAINING.observation_history_length
+    )
+
+    if controller_name == "SAC":
+
+        initial_observation = np.asarray(
+            [
+                plant.state.displacement_m
+                / TRAINING.displacement_scale_m,
+
+                plant.state.velocity_m_s
+                / TRAINING.velocity_scale_m_s,
+
+                plant.actual_current_a
+                / PLANT.continuous_current_limit_a,
+            ],
+            dtype=np.float32,
+        )
+
+        for _ in range(
+            TRAINING.observation_history_length
+        ):
+
+            history.append(
+                initial_observation.copy()
+            )
+
+    sac_commanded_current_a = 0.0
+
+    for step_index in range(
+        n_steps
+    ):
+
+        time_s = (
+            step_index * dt
+        )
+
         state = plant.state
 
-        if name == "No control":
-            force = 0.0
-        elif name == "PID":
-            force = pid.act(
-                state.displacement_m,
-                state.velocity_m_s,
-                PLANT.dt_s,
-            )
-        else:
-            obs = np.array([
-                state.displacement_m / TRAINING.displacement_scale_m,
-                state.velocity_m_s / TRAINING.velocity_scale_m_s,
-                previous_action,
-            ], dtype=np.float32)
+        disturbance_n = (
+            force_model(time_s)
+        )
 
-            action, _ = sac.predict(obs, deterministic=True)
-            previous_action = float(np.clip(
-                np.asarray(action).reshape(-1)[0], -1.0, 1.0
-            ))
-            force = previous_action * PLANT.max_control_force_n
+        # -----------------------------------------------------
+        # SAC
+        # -----------------------------------------------------
+
+        if controller_name == "SAC":
+
+            if step_index % action_repeat == 0:
+
+                observation = (
+                    make_sac_observation(
+                        plant,
+                        history,
+                    )
+                )
+
+                action, _ = model.predict(
+                    observation,
+                    deterministic=True,
+                )
+
+                normalized_action = float(
+                    np.clip(
+                        np.asarray(
+                            action
+                        ).reshape(-1)[0],
+                        -1.0,
+                        1.0,
+                    )
+                )
+
+                sac_commanded_current_a = (
+                    normalized_action
+                    * PLANT.continuous_current_limit_a
+                )
+
+            commanded_current_a = (
+                sac_commanded_current_a
+            )
+
+            normalized_action = (
+                commanded_current_a
+                / PLANT.continuous_current_limit_a
+            )
+
+        # -----------------------------------------------------
+        # PID / No Control
+        # -----------------------------------------------------
+
+        else:
+
+            commanded_current_a = float(
+                controller.act(
+                    state.displacement_m,
+                    state.velocity_m_s,
+                    dt,
+                )
+            )
+
+            commanded_current_a = float(
+                np.clip(
+                    commanded_current_a,
+                    -PLANT.continuous_current_limit_a,
+                    PLANT.continuous_current_limit_a,
+                )
+            )
+
+            normalized_action = (
+                commanded_current_a
+                / PLANT.continuous_current_limit_a
+            )
 
         next_state = plant.step(
-            disturbance(i * PLANT.dt_s), force
+            disturbance_n=disturbance_n,
+            current_a=commanded_current_a,
         )
-        x[i] = next_state.displacement_m * 1e6  # micrometres
-        u[i] = force
 
-    steady_x = x[steady_start:]
-    steady_u = u[steady_start:]
+        records.append(
+            {
+                "time_s":
+                    time_s + dt,
+
+                "displacement_um":
+                    next_state.displacement_m
+                    * 1e6,
+
+                "velocity_mm_s":
+                    next_state.velocity_m_s
+                    * 1e3,
+
+                "disturbance_force_n":
+                    disturbance_n,
+
+                "commanded_current_a":
+                    commanded_current_a,
+
+                "control_current_a":
+                    plant.actual_current_a,
+
+                "normalized_action":
+                    normalized_action,
+            }
+        )
+
+    return pd.DataFrame(
+        records
+    )
+
+
+def calculate_metrics(data):
+    """Calculate robust-evaluation metrics."""
+
+    displacement = (
+        data["displacement_um"]
+        .to_numpy()
+    )
+
+    current = (
+        data["control_current_a"]
+        .to_numpy()
+    )
+
+    start = min(
+        int(0.2 * len(data)),
+        len(data) - 1,
+    )
+
+    steady_displacement = (
+        displacement[start:]
+    )
+
+    steady_current = (
+        current[start:]
+    )
+
+    limit = (
+        PLANT.continuous_current_limit_a
+    )
+
+    near_saturation = (
+        np.abs(current)
+        >= 0.95 * limit
+    )
+
+    hard_saturation = (
+        np.abs(current)
+        >= 0.999 * limit
+    )
 
     return {
-        "rms_vibration_um": float(np.sqrt(np.mean(x ** 2))),
-        "steady_rms_vibration_um": float(np.sqrt(np.mean(steady_x ** 2))),
-        "peak_vibration_um": float(np.max(np.abs(x))),
-        "rms_control_force_n": float(np.sqrt(np.mean(steady_u ** 2))),
-        "peak_control_force_n": float(np.max(np.abs(steady_u))),
-        "saturation_percent": float(100 * np.mean(
-            np.abs(steady_u) >= 0.99 * PLANT.max_control_force_n
-        )),
+        "rms_vibration_um":
+            float(
+                np.sqrt(
+                    np.mean(
+                        displacement**2
+                    )
+                )
+            ),
+
+        "peak_vibration_um":
+            float(
+                np.max(
+                    np.abs(displacement)
+                )
+            ),
+
+        "steady_rms_vibration_um":
+            float(
+                np.sqrt(
+                    np.mean(
+                        steady_displacement**2
+                    )
+                )
+            ),
+
+        "rms_control_current_a":
+            float(
+                np.sqrt(
+                    np.mean(
+                        steady_current**2
+                    )
+                )
+            ),
+
+        "peak_control_current_a":
+            float(
+                np.max(
+                    np.abs(current)
+                )
+            ),
+
+        "near_saturation_percent":
+            float(
+                100.0
+                * np.mean(
+                    near_saturation
+                )
+            ),
+
+        "hard_saturation_percent":
+            float(
+                100.0
+                * np.mean(
+                    hard_saturation
+                )
+            ),
     }
 
 
 def main():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"Cannot find {MODEL_PATH}. Train SAC first or correct MODEL_PATH."
-        )
+    """Run the complete robust evaluation."""
 
-    OUT.mkdir(exist_ok=True)
-    sac = SAC.load(str(MODEL_PATH))
-    conditions = make_conditions()
-    rows = []
+    model_path = (
+        "results/"
+        "sac_vibration_model_7mode.zip"
+    )
 
-    total = len(conditions) * 3
-    done = 0
-    print(f"Testing {len(conditions)} conditions; {total} simulations total.")
+    output_dir = Path(
+        "results"
+    )
 
-    for cid, condition in enumerate(conditions, start=1):
-        # All controllers get exactly the same amplitude, frequency and phase.
-        for name in ["No control", "PID", "SAC"]:
-            metrics = simulate(
-                name, condition, sac if name == "SAC" else None
-            )
-            rows.append({
-                "condition_id": cid,
-                **condition,
-                "controller": name,
-                **metrics,
-            })
-            done += 1
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-        if cid % 6 == 0 or cid == len(conditions):
-            print(f"Completed {done}/{total} simulations")
+    model = SAC.load(
+        model_path
+    )
 
-    detail = pd.DataFrame(rows)
+    results = []
 
-    # Compare each controller against No control for the SAME condition.
-    baseline = detail[detail.controller == "No control"][
-        ["condition_id", "steady_rms_vibration_um"]
-    ].rename(columns={
-        "steady_rms_vibration_um": "no_control_steady_rms_um"
-    })
+    total_cases = (
+        len(AMPLITUDES_N)
+        * len(FREQUENCIES_HZ)
+        * len(PHASES_RAD)
+    )
 
-    detail = detail.merge(baseline, on="condition_id", how="left")
-    detail["reduction_percent"] = 100 * (
-        detail.no_control_steady_rms_um - detail.steady_rms_vibration_um
-    ) / detail.no_control_steady_rms_um.replace(0, np.nan)
+    case_number = 0
 
-    detail.to_csv(OUT / "robust_evaluation_by_condition.csv", index=False)
+    for amplitude_n in AMPLITUDES_N:
 
-    # Summarise all conditions and the in-range / out-of-range frequency groups.
-    summaries = []
-    groups = ["all", "within_training_range", "outside_training_range"]
+        for frequency_hz in FREQUENCIES_HZ:
 
-    for group in groups:
-        part = detail if group == "all" else detail[
-            detail.frequency_group == group
+            for phase_rad in PHASES_RAD:
+
+                disturbance = (
+                    type(
+                        "Disturbance",
+                        (),
+                        {
+                            "amplitude_n":
+                                amplitude_n,
+
+                            "frequency_hz":
+                                frequency_hz,
+
+                            "phase_rad":
+                                phase_rad,
+                        },
+                    )()
+                )
+
+                for controller_name in (
+                    "No control",
+                    "PID",
+                    "SAC",
+                ):
+
+                    data = simulate(
+                        controller_name,
+                        disturbance,
+                        model=(
+                            model
+                            if controller_name == "SAC"
+                            else None
+                        ),
+                    )
+
+                    metrics = (
+                        calculate_metrics(
+                            data
+                        )
+                    )
+
+                    metrics.update(
+                        controller=controller_name,
+                        amplitude_n=amplitude_n,
+                        frequency_hz=frequency_hz,
+                        phase_rad=phase_rad,
+                    )
+
+                    results.append(
+                        metrics
+                    )
+
+                case_number += 1
+
+                print(
+                    f"Completed "
+                    f"{case_number}/{total_cases}"
+                )
+
+    results_frame = pd.DataFrame(
+        results
+    )
+
+    output_csv = (
+        output_dir
+        / "robust_evaluation.csv"
+    )
+
+    results_frame.to_csv(
+        output_csv,
+        index=False,
+    )
+
+    print(
+        "\nRobust evaluation saved to:"
+    )
+
+    print(
+        output_csv.resolve()
+    )
+
+    print(
+        "\nSummary:"
+    )
+
+    summary = (
+        results_frame
+        .groupby("controller")
+        [
+            [
+                "rms_vibration_um",
+                "steady_rms_vibration_um",
+                "peak_vibration_um",
+                "rms_control_current_a",
+                "peak_control_current_a",
+                "near_saturation_percent",
+                "hard_saturation_percent",
+            ]
         ]
+        .mean()
+    )
 
-        for name in ["No control", "PID", "SAC"]:
-            c = part[part.controller == name]
-            reductions = c.reduction_percent.dropna()
-
-            summaries.append({
-                "frequency_group": group,
-                "controller": name,
-                "number_of_conditions": len(c),
-                "mean_steady_rms_um": c.steady_rms_vibration_um.mean(),
-                "median_steady_rms_um": c.steady_rms_vibration_um.median(),
-                "mean_reduction_percent": reductions.mean(),
-                "median_reduction_percent": reductions.median(),
-                "percent_conditions_better_than_no_control":
-                    100 * (reductions > 0).mean(),
-                "mean_control_force_n": c.rms_control_force_n.mean(),
-                "mean_saturation_percent": c.saturation_percent.mean(),
-            })
-
-    summary = pd.DataFrame(summaries)
-    summary.to_csv(OUT / "robust_evaluation_summary.csv", index=False)
-
-    # Plot average steady RMS vibration by frequency group.
-    plot_groups = ["within_training_range", "outside_training_range"]
-    labels = ["Within training range", "Outside training range"]
-    controllers = ["No control", "PID", "SAC"]
-    xloc = np.arange(2)
-    width = 0.24
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for j, name in enumerate(controllers):
-        values = []
-        for group in plot_groups:
-            row = summary[
-                (summary.frequency_group == group)
-                & (summary.controller == name)
-            ]
-            values.append(row.mean_steady_rms_um.iloc[0])
-        ax.bar(xloc + (j - 1) * width, values, width, label=name)
-
-    ax.set_xticks(xloc)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Mean steady RMS vibration (micrometres)")
-    ax.set_title("Average vibration: lower is better")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(OUT / "robust_evaluation_rms.png", dpi=160)
-    plt.close(fig)
-
-    # Plot vibration reduction relative to No control.
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for j, name in enumerate(controllers):
-        values = []
-        for group in plot_groups:
-            row = summary[
-                (summary.frequency_group == group)
-                & (summary.controller == name)
-            ]
-            values.append(row.mean_reduction_percent.iloc[0])
-        ax.bar(xloc + (j - 1) * width, values, width, label=name)
-
-    ax.axhline(0, color="black", linewidth=0.8)
-    ax.set_xticks(xloc)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Mean vibration reduction vs No control (%)")
-    ax.set_title("Positive is better; negative means vibration increased")
-    ax.legend()
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(OUT / "robust_evaluation_reduction.png", dpi=160)
-    plt.close(fig)
-
-    columns = [
-        "frequency_group", "controller", "number_of_conditions",
-        "mean_steady_rms_um", "mean_reduction_percent",
-        "median_reduction_percent",
-        "percent_conditions_better_than_no_control",
-        "mean_control_force_n", "mean_saturation_percent",
-    ]
-    print("\nSUMMARY:")
-    print(summary[columns].round(4).to_string(index=False))
-    print("\nSaved results:")
-    print("results\\robust_evaluation_by_condition.csv")
-    print("results\\robust_evaluation_summary.csv")
-    print("results\\robust_evaluation_rms.png")
-    print("results\\robust_evaluation_reduction.png")
+    print(
+        summary.to_string(
+            float_format=lambda x: f"{x:.6g}"
+        )
+    )
 
 
 if __name__ == "__main__":

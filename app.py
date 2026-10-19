@@ -72,11 +72,11 @@ def make_comparison_table(results):
             "Peak vibration (µm)": metric_value(
                 result, "peak_vibration_um"
             ),
-            "RMS force (N)": metric_value(
-                result, "rms_control_force_n"
+            "RMS current (A)": metric_value(
+                result, "rms_control_current_a"
             ),
-            "Peak force (N)": metric_value(
-                result, "peak_control_force_n"
+            "Peak current (A)": metric_value(
+                result, "peak_control_current_a"
             ),
             "Saturation (%)": 100 * metric_value(
                 result, "actuator_saturation_fraction"
@@ -123,7 +123,7 @@ def make_force_disturbance_plot(traces):
         vertical_spacing=0.12,
         subplot_titles=(
             "Applied disturbance force",
-            "Controller force",
+            "Controller current",
         ),
     )
 
@@ -149,7 +149,7 @@ def make_force_disturbance_plot(traces):
         fig.add_trace(
             go.Scatter(
                 x=data["time_s"],
-                y=data["control_force_n"],
+                y=data["control_current_a"],
                 name=f"{controller} control",
                 line={"color": color, "width": 1.5},
                 legendgroup=controller,
@@ -160,7 +160,7 @@ def make_force_disturbance_plot(traces):
 
     fig.update_xaxes(title_text="Time (s)", row=2, col=1)
     fig.update_yaxes(title_text="Force (N)", row=1, col=1)
-    fig.update_yaxes(title_text="Force (N)", row=2, col=1)
+    fig.update_yaxes(title_text="Current (A)", row=2, col=1)
     fig.update_layout(
         height=650,
         hovermode="x unified",
@@ -205,7 +205,7 @@ with st.sidebar:
     st.header("Simulation settings")
 
     amplitude_n = st.slider(
-        "Disturbance amplitude (N)",
+        "Cutting-force amplitude (N)",
         min_value=0.0,
         max_value=3.0,
         value=1.0,
@@ -528,12 +528,13 @@ with tab_data:
 with st.expander("Model assumptions and limitations"):
     st.markdown(
         """
-        - This is a **single-mode oscillator with a harmonic disturbance**.
+        - This is a **seven-mode current-driven modal model** with a harmonic cutting-force disturbance.
         - The SAC policy is loaded from a previously trained model; this
           dashboard does not train it.
         - PID uses fixed gains; SAC uses a learned policy.
-        - The current evaluation does not add sensor noise or randomized
-          plant parameters within each run.
+        - Sensor noise, Kalman filtering, amplifier dynamics, and randomized
+          plant parameters are not included in this phase. The SAC action is
+          mapped to the 5 A continuous current limit.
         - Results do not establish performance on regenerative chatter,
           a physical boring bar, or real actuator hardware.
         - A single manually selected condition is not sufficient to claim

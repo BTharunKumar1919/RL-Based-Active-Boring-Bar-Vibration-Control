@@ -1,0 +1,13 @@
+{
+  "kp": 180000.0,
+  "ki": 0.0,
+  "kd": 0.0,
+  "selection_method": "two-stage coarse/fine search",
+  "training_condition_count": 18,
+  "validation_condition_count": 40,
+  "duration_s": 0.2,
+  "steady_start_fraction": 0.2,
+  "displacement_weight": 1.0,
+  "current_weight": 0.05,
+  "saturation_weight": 2.0
+}

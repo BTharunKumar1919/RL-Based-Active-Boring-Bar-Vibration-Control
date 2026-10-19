@@ -1,38 +1,31 @@
-
-"""Baseline controllers for the single-mode vibration-control model."""
+"""Baseline controllers for the current-driven seven-mode plant."""
 from dataclasses import dataclass
-
 import numpy as np
 
 from config import PLANT, PlantConfig
 
 
 class NoControl:
-    """Baseline with no active control force."""
-
+    """Baseline with zero actuator current."""
     def reset(self):
-        """Reset controller state; this controller has no internal state."""
         pass
 
     def act(self, displacement_m, velocity_m_s, dt_s):
-        """Return zero control force."""
         return 0.0
 
 
 @dataclass
 class PIDController:
-    """PID baseline with force saturation and integral anti-windup.
+    """PID controller whose output is current in amperes.
 
-    The default gains are initial simulation values, not tuned industrial
-    gains. The controller uses displacement and velocity in SI units.
+    Units: kp [A/m], ki [A/(m s)], kd [A/(m/s)].
+    The gains must be retuned for the new plant and current-limited output.
     """
-
-    kp: float = 50000.0
+    kp: float = 180000
     ki: float = 0.0
-    kd: float = 20.0
+    kd: float = 0.0
     plant_config: PlantConfig = PLANT
     integral_limit_m_s: float = 1.0e-3
-
     integral_error: float = 0.0
 
     def __post_init__(self):
@@ -42,49 +35,23 @@ class PIDController:
             raise ValueError("Integral limit must be positive.")
 
     def reset(self):
-        """Clear the integral state before a new simulation."""
         self.integral_error = 0.0
 
     def act(self, displacement_m, velocity_m_s, dt_s):
-        """Calculate a bounded force command opposing the measured motion."""
         if dt_s <= 0:
             raise ValueError("dt_s must be positive.")
-
-        displacement_m = float(displacement_m)
-        velocity_m_s = float(velocity_m_s)
-
-        old_integral = self.integral_error
-        candidate_integral = float(
-            np.clip(
-                old_integral + displacement_m * dt_s,
-                -self.integral_limit_m_s,
-                self.integral_limit_m_s,
-            )
-        )
-
-        unsaturated_force_n = (
-            -self.kp * displacement_m
-            -self.kd * velocity_m_s
-            -self.ki * candidate_integral
-        )
-
-        force_limit_n = self.plant_config.max_control_force_n
-        saturated_force_n = float(
-            np.clip(
-                unsaturated_force_n,
-                -force_limit_n,
-                force_limit_n,
-            )
-        )
-
-        # Conditional integration: avoid integrating farther into saturation.
-        saturated_high = unsaturated_force_n > force_limit_n
-        saturated_low = unsaturated_force_n < -force_limit_n
-
-        if not (
-            (saturated_high and displacement_m < 0)
-            or (saturated_low and displacement_m > 0)
-        ):
+        x = float(displacement_m)
+        v = float(velocity_m_s)
+        candidate_integral = float(np.clip(
+            self.integral_error + x * dt_s,
+            -self.integral_limit_m_s,
+            self.integral_limit_m_s,
+        ))
+        unsaturated_current = -self.kp*x - self.kd*v - self.ki*candidate_integral
+        limit = self.plant_config.continuous_current_limit_a
+        current = float(np.clip(unsaturated_current, -limit, limit))
+        sat_high = unsaturated_current > limit
+        sat_low = unsaturated_current < -limit
+        if not ((sat_high and x < 0) or (sat_low and x > 0)):
             self.integral_error = candidate_integral
-
-        return saturated_force_n
+        return current

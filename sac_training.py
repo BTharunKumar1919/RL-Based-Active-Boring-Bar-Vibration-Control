@@ -1,5 +1,5 @@
-
 """Train and save a Soft Actor-Critic vibration controller."""
+
 from pathlib import Path
 
 from stable_baselines3 import SAC
@@ -13,19 +13,22 @@ from env import VibrationEnv
 def train_sac(
     total_timesteps=None,
     seed=None,
-    model_path="results/sac_vibration_model",
+    model_path="results/sac_vibration_model_7mode",
 ):
-    """Train SAC and save the trained model.
+    """Train SAC and save the trained model."""
 
-    Parameters can be overridden for short smoke tests.
-    """
     if total_timesteps is None:
-        total_timesteps = TRAINING.total_timesteps
+        total_timesteps = (
+            TRAINING.total_timesteps
+        )
+
     if seed is None:
         seed = TRAINING.seed
 
     if total_timesteps <= 0:
-        raise ValueError("total_timesteps must be positive.")
+        raise ValueError(
+            "total_timesteps must be positive."
+        )
 
     set_random_seed(seed)
 
@@ -40,6 +43,7 @@ def train_sac(
     model = SAC(
         policy="MlpPolicy",
         env=env,
+
         learning_rate=TRAINING.learning_rate,
         buffer_size=TRAINING.buffer_size,
         learning_starts=TRAINING.learning_starts,
@@ -48,24 +52,49 @@ def train_sac(
         gamma=TRAINING.gamma,
         train_freq=TRAINING.train_freq,
         gradient_steps=TRAINING.gradient_steps,
+
         seed=seed,
+
         verbose=1,
         device="auto",
-        tensorboard_log="results/tensorboard",
+
+        tensorboard_log=(
+            "results/tensorboard"
+        ),
     )
 
-    print(f"Starting SAC training for {total_timesteps:,} timesteps.")
+    print(
+        f"Starting SAC training for "
+        f"{total_timesteps:,} timesteps."
+    )
+
     model.learn(
-        total_timesteps=int(total_timesteps),
+        total_timesteps=int(
+            total_timesteps
+        ),
         progress_bar=False,
     )
 
-    output_path = Path(model_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    model.save(str(output_path))
+    output_path = Path(
+        model_path
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    model.save(
+        str(output_path)
+    )
 
     env.close()
-    print(f"Saved SAC model to: {output_path}.zip")
+
+    print(
+        f"Saved SAC model to: "
+        f"{output_path}.zip"
+    )
+
     return model
 
 

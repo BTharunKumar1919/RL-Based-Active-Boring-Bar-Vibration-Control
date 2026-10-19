@@ -17,7 +17,7 @@ from deployment_service import (
 app = FastAPI(
     title="Boring-Bar Vibration Control API",
     description=(
-        "Educational API for a single-mode simulated vibration-control model. "
+        "Educational API for a seven-mode simulated vibration-control model. "
         "This API does not control physical machinery."
     ),
     version="1.0.0",

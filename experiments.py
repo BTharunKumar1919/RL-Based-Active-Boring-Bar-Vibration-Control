@@ -1,17 +1,79 @@
+"""Run fair controller comparisons for the seven-mode plant."""
 
-"""Run fair controller comparisons and save quantitative results."""
+from collections import deque
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
 from stable_baselines3 import SAC
 
-from config import PLANT, TRAINING, EVALUATION, DisturbanceConfig
-from models import SingleModePlant, SinusoidalCuttingForce
-from controllers import NoControl, PIDController
+from config import (
+    PLANT,
+    TRAINING,
+    EVALUATION,
+    DisturbanceConfig,
+)
+
+from models import (
+    SevenModePlant,
+    SinusoidalCuttingForce,
+)
+
+from controllers import (
+    NoControl,
+    PIDController,
+)
+
+
+def _make_sac_observation(
+    plant,
+    history,
+):
+    """Construct the SAC observation from recent history."""
+
+    state = plant.state
+
+    current_limit = (
+        PLANT.continuous_current_limit_a
+    )
+
+    current_observation = np.asarray(
+        [
+            state.displacement_m
+            / TRAINING.displacement_scale_m,
+
+            state.velocity_m_s
+            / TRAINING.velocity_scale_m_s,
+
+            plant.actual_current_a
+            / current_limit,
+        ],
+        dtype=np.float32,
+    )
+
+    history.append(
+        current_observation
+    )
+
+    if len(history) < TRAINING.observation_history_length:
+
+        first = history[0]
+
+        while len(history) < (
+            TRAINING.observation_history_length
+        ):
+            history.appendleft(
+                first.copy()
+            )
+
+    return np.concatenate(
+        list(history)
+    ).astype(np.float32)
 
 
 def simulate_controller(
@@ -20,255 +82,641 @@ def simulate_controller(
     duration_s,
     model=None,
 ):
-    """Simulate one controller using the shared plant integration method."""
-    if duration_s <= 0:
-        raise ValueError("duration_s must be positive.")
+    """Simulate one controller under one disturbance condition."""
 
-    plant = SingleModePlant(PLANT)
-    plant.reset(0.0, 0.0)
-    force_model = SinusoidalCuttingForce(disturbance_config)
+    if duration_s <= 0:
+        raise ValueError(
+            "duration_s must be positive."
+        )
+
+    plant = SevenModePlant(PLANT)
+    plant.reset()
+
+    force_model = SinusoidalCuttingForce(
+        disturbance_config
+    )
 
     if controller_name == "No control":
+
         controller = NoControl()
+
     elif controller_name == "PID":
-        controller = PIDController(plant_config=PLANT)
+
+        controller = PIDController(
+            plant_config=PLANT
+        )
+
     elif controller_name == "SAC":
+
         if model is None:
-            raise ValueError("A trained SAC model is required.")
+            raise ValueError(
+                "A trained SAC model is required."
+            )
+
         controller = None
+
     else:
-        raise ValueError(f"Unknown controller: {controller_name}")
+
+        raise ValueError(
+            f"Unknown controller: {controller_name}"
+        )
 
     if controller is not None:
         controller.reset()
 
     dt = PLANT.dt_s
-    n_steps = int(round(duration_s / dt))
-    previous_action = 0.0
+
+    action_repeat = (
+        TRAINING.sac_action_repeat
+    )
+
+    rl_dt = dt * action_repeat
+
+    n_steps = int(
+        round(duration_s / dt)
+    )
+
     records = []
 
-    for step_index in range(n_steps):
-        time_s = step_index * dt
+    # ---------------------------------------------------------
+    # SAC history.
+    # ---------------------------------------------------------
+
+    history = deque(
+        maxlen=TRAINING.observation_history_length
+    )
+
+    if controller_name == "SAC":
+
+        initial_observation = np.asarray(
+            [
+                plant.state.displacement_m
+                / TRAINING.displacement_scale_m,
+
+                plant.state.velocity_m_s
+                / TRAINING.velocity_scale_m_s,
+
+                plant.actual_current_a
+                / PLANT.continuous_current_limit_a,
+            ],
+            dtype=np.float32,
+        )
+
+        for _ in range(
+            TRAINING.observation_history_length
+        ):
+            history.append(
+                initial_observation.copy()
+            )
+
+    # Current SAC command.
+    sac_commanded_current_a = 0.0
+
+    for step_index in range(
+        n_steps
+    ):
+
+        time_s = (
+            step_index * dt
+        )
+
         state = plant.state
-        disturbance_n = force_model(time_s)
+
+        disturbance_n = force_model(
+            time_s
+        )
+
+        # =====================================================
+        # SAC
+        # =====================================================
 
         if controller_name == "SAC":
-            observation = np.asarray(
-                [
-                    state.displacement_m / TRAINING.displacement_scale_m,
-                    state.velocity_m_s / TRAINING.velocity_scale_m_s,
-                    previous_action,
-                ],
-                dtype=np.float32,
+
+            # SAC selects a new command every
+            # action_repeat physical plant steps.
+            if step_index % action_repeat == 0:
+
+                observation = (
+                    _make_sac_observation(
+                        plant,
+                        history,
+                    )
+                )
+
+                action, _ = model.predict(
+                    observation,
+                    deterministic=True,
+                )
+
+                normalized_action = float(
+                    np.clip(
+                        np.asarray(
+                            action
+                        ).reshape(-1)[0],
+                        -1.0,
+                        1.0,
+                    )
+                )
+
+                sac_commanded_current_a = (
+                    normalized_action
+                    * PLANT.continuous_current_limit_a
+                )
+
+            commanded_current_a = (
+                sac_commanded_current_a
             )
-            action, _ = model.predict(
-                observation,
-                deterministic=True,
+
+            normalized_action = (
+                commanded_current_a
+                / PLANT.continuous_current_limit_a
             )
-            normalized_action = float(
-                np.clip(np.asarray(action).reshape(-1)[0], -1.0, 1.0)
-            )
-            control_n = normalized_action * PLANT.max_control_force_n
-            previous_action = normalized_action
+
+        # =====================================================
+        # PID / No Control
+        # =====================================================
+
         else:
-            control_n = float(
+
+            commanded_current_a = float(
                 controller.act(
                     state.displacement_m,
                     state.velocity_m_s,
                     dt,
                 )
             )
-            control_n = float(
+
+            commanded_current_a = float(
                 np.clip(
-                    control_n,
-                    -PLANT.max_control_force_n,
-                    PLANT.max_control_force_n,
+                    commanded_current_a,
+                    -PLANT.continuous_current_limit_a,
+                    PLANT.continuous_current_limit_a,
                 )
             )
 
+            normalized_action = (
+                commanded_current_a
+                / PLANT.continuous_current_limit_a
+            )
+
+        # =====================================================
+        # Advance physical plant.
+        # =====================================================
+
         next_state = plant.step(
             disturbance_n=disturbance_n,
-            control_n=control_n,
+            current_a=commanded_current_a,
         )
 
         records.append(
             {
-                "time_s": time_s + dt,
-                "displacement_um": next_state.displacement_m * 1e6,
-                "velocity_mm_s": next_state.velocity_m_s * 1e3,
-                "disturbance_force_n": disturbance_n,
-                "control_force_n": control_n,
+                "time_s":
+                    time_s + dt,
+
+                "displacement_um":
+                    next_state.displacement_m
+                    * 1e6,
+
+                "velocity_mm_s":
+                    next_state.velocity_m_s
+                    * 1e3,
+
+                "disturbance_force_n":
+                    disturbance_n,
+
+                "commanded_current_a":
+                    commanded_current_a,
+
+                "control_current_a":
+                    plant.actual_current_a,
+
+                "normalized_action":
+                    normalized_action,
             }
         )
 
-    return pd.DataFrame(records)
+    return pd.DataFrame(
+        records
+    )
 
 
 def calculate_metrics(data):
-    """Calculate full-record and steady-window vibration/control metrics."""
-    displacement = data["displacement_um"].to_numpy()
-    force = data["control_force_n"].to_numpy()
+    """Calculate vibration and actuator metrics."""
 
     if len(data) == 0:
-        raise ValueError("Cannot calculate metrics for empty data.")
+        raise ValueError(
+            "Cannot calculate metrics for empty data."
+        )
 
-    # Discard the first 20% as a transient window for the steady metric.
-    start = min(int(0.2 * len(data)), len(data) - 1)
-    steady_displacement = displacement[start:]
+    displacement = data[
+        "displacement_um"
+    ].to_numpy()
 
-    force_limit = PLANT.max_control_force_n
-    saturation = np.abs(force) >= 0.99 * force_limit
+    current = data[
+        "control_current_a"
+    ].to_numpy()
+
+    start = min(
+        int(0.2 * len(data)),
+        len(data) - 1,
+    )
+
+    steady_displacement = (
+        displacement[start:]
+    )
+
+    steady_current = (
+        current[start:]
+    )
+
+    limit = (
+        PLANT.continuous_current_limit_a
+    )
+
+    near_saturation = (
+        np.abs(current)
+        >= 0.95 * limit
+    )
+
+    hard_saturation = (
+        np.abs(current)
+        >= 0.999 * limit
+    )
 
     return {
-        "rms_vibration_um": float(np.sqrt(np.mean(displacement**2))),
-        "peak_vibration_um": float(np.max(np.abs(displacement))),
-        "steady_rms_vibration_um": float(
-            np.sqrt(np.mean(steady_displacement**2))
-        ),
-        "rms_control_force_n": float(np.sqrt(np.mean(force**2))),
-        "peak_control_force_n": float(np.max(np.abs(force))),
-        "actuator_saturation_fraction": float(np.mean(saturation)),
+        "rms_vibration_um":
+            float(
+                np.sqrt(
+                    np.mean(
+                        displacement**2
+                    )
+                )
+            ),
+
+        "peak_vibration_um":
+            float(
+                np.max(
+                    np.abs(displacement)
+                )
+            ),
+
+        "steady_rms_vibration_um":
+            float(
+                np.sqrt(
+                    np.mean(
+                        steady_displacement**2
+                    )
+                )
+            ),
+
+        "rms_control_current_a":
+            float(
+                np.sqrt(
+                    np.mean(
+                        steady_current**2
+                    )
+                )
+            ),
+
+        "peak_control_current_a":
+            float(
+                np.max(
+                    np.abs(current)
+                )
+            ),
+
+        "actuator_near_saturation_fraction":
+            float(
+                np.mean(
+                    near_saturation
+                )
+            ),
+
+        "actuator_saturation_fraction":
+            float(
+                np.mean(
+                    hard_saturation
+                )
+            ),
     }
 
 
-def _save_plots(condition_name, condition_data, output_dir):
-    """Save overlay, SAC-only zoom, and controller-force plots."""
-    output_dir = Path(output_dir)
-    time_ms = condition_data["No control"]["time_s"].to_numpy() * 1000.0
+def _save_plots(
+    condition_name,
+    condition_data,
+    output_dir,
+):
+    """Save displacement and current comparison plots."""
 
-    # Overlay can be dominated by the uncontrolled response.
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for name, data in condition_data.items():
+    output_dir = Path(
+        output_dir
+    )
+
+    time_ms = (
+        condition_data["No control"][
+            "time_s"
+        ].to_numpy()
+        * 1000.0
+    )
+
+    # ---------------------------------------------------------
+    # Displacement comparison.
+    # ---------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(10, 5)
+    )
+
+    for name, data in (
+        condition_data.items()
+    ):
+
         ax.plot(
             time_ms,
             data["displacement_um"],
             label=name,
             linewidth=1.1,
         )
-    ax.set_title(f"Displacement comparison — {condition_name}")
-    ax.set_xlabel("Time (ms)")
-    ax.set_ylabel("Modal-coordinate displacement (µm)")
-    ax.grid(True, alpha=0.3)
+
+    ax.set_title(
+        f"Displacement comparison — "
+        f"{condition_name}"
+    )
+
+    ax.set_xlabel(
+        "Time (ms)"
+    )
+
+    ax.set_ylabel(
+        "Tool-tip displacement "
+        "(µm; modal sum)"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+    )
+
     ax.legend()
+
     fig.tight_layout()
+
     fig.savefig(
-        output_dir / f"displacement_{condition_name}_overlay.png",
+        output_dir
+        / f"displacement_{condition_name}_overlay.png",
         dpi=160,
     )
+
     plt.close(fig)
 
-    # A separate SAC plot avoids hiding its trace on the overlay scale.
-    sac_data = condition_data["SAC"]
-    fig, ax = plt.subplots(figsize=(10, 5))
+    # ---------------------------------------------------------
+    # SAC displacement detail.
+    # ---------------------------------------------------------
+
+    sac_data = (
+        condition_data["SAC"]
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(10, 5)
+    )
+
     ax.plot(
         sac_data["time_s"] * 1000.0,
         sac_data["displacement_um"],
         linewidth=1.2,
         label="SAC",
     )
-    ax.set_title(f"SAC displacement detail — {condition_name}")
-    ax.set_xlabel("Time (ms)")
-    ax.set_ylabel("Modal-coordinate displacement (µm)")
-    ax.grid(True, alpha=0.3)
+
+    ax.set_title(
+        f"SAC displacement detail — "
+        f"{condition_name}"
+    )
+
+    ax.set_xlabel(
+        "Time (ms)"
+    )
+
+    ax.set_ylabel(
+        "Tool-tip displacement "
+        "(µm; modal sum)"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+    )
+
     ax.legend()
+
     fig.tight_layout()
+
     fig.savefig(
-        output_dir / f"displacement_{condition_name}_sac_zoom.png",
+        output_dir
+        / f"displacement_{condition_name}_sac_zoom.png",
         dpi=160,
     )
+
     plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for name, data in condition_data.items():
+    # ---------------------------------------------------------
+    # Actuator current.
+    # ---------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(10, 5)
+    )
+
+    for name, data in (
+        condition_data.items()
+    ):
+
         ax.plot(
             data["time_s"] * 1000.0,
-            data["control_force_n"],
+            data["control_current_a"],
             label=name,
             linewidth=1.0,
         )
+
     ax.axhline(
-        PLANT.max_control_force_n,
+        PLANT.continuous_current_limit_a,
         linestyle="--",
         linewidth=0.8,
-        label="Force limit",
+        label="Continuous current limit",
     )
+
     ax.axhline(
-        -PLANT.max_control_force_n,
+        -PLANT.continuous_current_limit_a,
         linestyle="--",
         linewidth=0.8,
     )
-    ax.set_title(f"Control force — {condition_name}")
-    ax.set_xlabel("Time (ms)")
-    ax.set_ylabel("Control force (N)")
-    ax.grid(True, alpha=0.3)
+
+    ax.set_title(
+        f"Actuator current — "
+        f"{condition_name}"
+    )
+
+    ax.set_xlabel(
+        "Time (ms)"
+    )
+
+    ax.set_ylabel(
+        "Control current (A)"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+    )
+
     ax.legend()
+
     fig.tight_layout()
-    fig.savefig(output_dir / f"control_{condition_name}.png", dpi=160)
+
+    fig.savefig(
+        output_dir
+        / f"control_{condition_name}.png",
+        dpi=160,
+    )
+
     plt.close(fig)
 
 
 def run_experiments(
-    model_path="results/sac_vibration_model.zip",
+    model_path="results/sac_vibration_model_7mode.zip",
     output_dir="results",
 ):
-    """Evaluate No Control, PID, and SAC on nominal and shifted inputs."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    """Run nominal and unseen controller comparisons."""
 
-    model = SAC.load(str(model_path))
+    output_dir = Path(
+        output_dir
+    )
+
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    model = SAC.load(
+        str(model_path)
+    )
 
     conditions = {
         "nominal": DisturbanceConfig(
-            amplitude_n=EVALUATION.nominal_amplitude_n,
-            frequency_hz=EVALUATION.nominal_frequency_hz,
-            phase_rad=0.0,
+            EVALUATION.nominal_amplitude_n,
+            EVALUATION.nominal_frequency_hz,
+            0.0,
         ),
+
         "unseen": DisturbanceConfig(
-            amplitude_n=EVALUATION.unseen_amplitude_n,
-            frequency_hz=EVALUATION.unseen_frequency_hz,
-            phase_rad=EVALUATION.test_phase_rad,
+            EVALUATION.unseen_amplitude_n,
+            EVALUATION.unseen_frequency_hz,
+            EVALUATION.test_phase_rad,
         ),
     }
 
     all_metrics = []
     all_timeseries = []
 
-    for condition_name, disturbance in conditions.items():
+    for (
+        condition_name,
+        disturbance,
+    ) in conditions.items():
+
         condition_data = {}
 
-        for controller_name in ("No control", "PID", "SAC"):
+        for controller_name in (
+            "No control",
+            "PID",
+            "SAC",
+        ):
+
             data = simulate_controller(
-                controller_name=controller_name,
-                disturbance_config=disturbance,
-                duration_s=EVALUATION.duration_s,
-                model=model if controller_name == "SAC" else None,
+                controller_name,
+                disturbance,
+                EVALUATION.duration_s,
+                model=(
+                    model
+                    if controller_name == "SAC"
+                    else None
+                ),
             )
-            data.insert(0, "controller", controller_name)
-            data.insert(0, "condition", condition_name)
-            condition_data[controller_name] = data
 
-            metrics = calculate_metrics(data)
-            metrics["condition"] = condition_name
-            metrics["controller"] = controller_name
-            all_metrics.append(metrics)
-            all_timeseries.append(data)
+            data.insert(
+                0,
+                "controller",
+                controller_name,
+            )
 
-        _save_plots(condition_name, condition_data, output_dir)
+            data.insert(
+                0,
+                "condition",
+                condition_name,
+            )
 
-    metrics_frame = pd.DataFrame(all_metrics)
-    timeseries_frame = pd.concat(all_timeseries, ignore_index=True)
+            condition_data[
+                controller_name
+            ] = data
 
-    metrics_path = output_dir / "controller_metrics.csv"
-    timeseries_path = output_dir / "controller_timeseries.csv"
+            metrics = calculate_metrics(
+                data
+            )
 
-    metrics_frame.to_csv(metrics_path, index=False)
-    timeseries_frame.to_csv(timeseries_path, index=False)
+            metrics.update(
+                condition=condition_name,
+                controller=controller_name,
+            )
 
-    print("\nController metrics:")
-    print(metrics_frame.to_string(index=False, float_format=lambda x: f"{x:.6g}"))
-    print(f"\nMetrics saved to: {metrics_path}")
-    print(f"Time series saved to: {timeseries_path}")
-    print(f"Plots saved under: {output_dir.resolve()}")
+            all_metrics.append(
+                metrics
+            )
+
+            all_timeseries.append(
+                data
+            )
+
+        _save_plots(
+            condition_name,
+            condition_data,
+            output_dir,
+        )
+
+    metrics_frame = pd.DataFrame(
+        all_metrics
+    )
+
+    timeseries_frame = pd.concat(
+        all_timeseries,
+        ignore_index=True,
+    )
+
+    metrics_frame.to_csv(
+        output_dir
+        / "controller_metrics.csv",
+        index=False,
+    )
+
+    timeseries_frame.to_csv(
+        output_dir
+        / "controller_timeseries.csv",
+        index=False,
+    )
+
+    print(
+        "\nController metrics:"
+    )
+
+    print(
+        metrics_frame.to_string(
+            index=False,
+            float_format=lambda x: f"{x:.6g}",
+        )
+    )
+
+    print(
+        f"\nResults saved under: "
+        f"{output_dir.resolve()}"
+    )
 
     return metrics_frame
 
