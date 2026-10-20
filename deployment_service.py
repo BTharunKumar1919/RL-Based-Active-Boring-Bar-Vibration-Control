@@ -34,6 +34,14 @@ MAX_PROCESS_NOISE_STD_N = 1.0
 MAX_CUTTING_FORCE_NOISE_STD_N = 1.0
 MAX_HARMONICS = 5
 
+# Default robust-evaluation grid. This matches the standalone V3 evaluator
+# while using the same simulation path as the App.
+ROBUST_AMPLITUDES_N = (0.5, 1.0, 1.5)
+ROBUST_FREQUENCIES_HZ = (150.0, 160.0, 174.0, 185.0, 200.0, 205.0, 215.0)
+ROBUST_PHASES_RAD = (0.0, np.pi / 2.0, np.pi, 3.0 * np.pi / 2.0)
+ROBUST_DEFAULT_DURATION_S = 0.2
+ROBUST_TRANSIENT_FRACTION = 0.2
+
 
 @lru_cache(maxsize=2)
 def _load_sac_model(model_path):
@@ -69,6 +77,7 @@ def run_simulation(
     harmonic_phase_rad=None,
     cutting_force_noise_std_n=0.0,
     cutting_force_noise_seed=42,
+    pid_gains=None,
 ):
     """Run one controller on one disturbance and one plant model."""
 
@@ -133,6 +142,17 @@ def run_simulation(
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
             raise ValueError(f"Harmonic {index} phase must be finite.")
 
+    pid_gains = {} if pid_gains is None else dict(pid_gains)
+    for key in ("kp", "ki", "kd", "integral_limit_m_s"):
+        value = pid_gains.get(key, None)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not np.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(f"PID {key} must be a finite non-negative number.")
+
     plant_config = build_plant_config(
         plant_variations,
         max_percent=MAX_PLANT_VARIATION_PERCENT,
@@ -177,12 +197,14 @@ def run_simulation(
         float(duration_s),
         model=model,
         plant_config=plant_config,
+        pid_gains=pid_gains,
         process_noise_std_n=float(process_noise_std_n),
         process_noise_seed=int(process_noise_seed),
     )
 
     metrics = calculate_metrics(
-        data
+        data,
+        plant_config=plant_config,
     )
 
     records = data.replace(
@@ -212,6 +234,12 @@ def run_simulation(
             "harmonic_phase_rad": [float(value) for value in harmonic_phase_rad],
             "cutting_force_noise_std_n": float(cutting_force_noise_std_n),
             "cutting_force_noise_seed": int(cutting_force_noise_seed),
+            "pid_gains": {
+                "kp": float(pid_gains.get("kp", 180000.0)),
+                "ki": float(pid_gains.get("ki", 0.0)),
+                "kd": float(pid_gains.get("kd", 0.0)),
+                "integral_limit_m_s": float(pid_gains.get("integral_limit_m_s", 1.0e-3)),
+            },
         },
         "plant_variations": plant_variations or {},
         "plant_variation_limit_percent": MAX_PLANT_VARIATION_PERCENT,
@@ -288,6 +316,7 @@ def compare_controllers(
     harmonic_phase_rad=None,
     cutting_force_noise_std_n=0.0,
     cutting_force_noise_seed=42,
+    pid_gains=None,
 ):
     """Compare all three controllers on exactly the same plant/noise."""
 
@@ -308,6 +337,7 @@ def compare_controllers(
             harmonic_phase_rad,
             cutting_force_noise_std_n,
             cutting_force_noise_seed,
+            pid_gains,
         )
 
         results.append(
@@ -318,3 +348,160 @@ def compare_controllers(
         )
 
     return results
+
+
+
+def _robust_score(vibration_reduction_pct, rms_current_a, saturation_pct, current_limit_a):
+    """Return a transparent composite score; higher is better.
+
+    70% is vibration reduction relative to No Control and 30% rewards low
+    actuator effort. Saturation is reported separately rather than hidden in
+    the score so the user can inspect the trade-off directly.
+    """
+    vibration_term = float(np.clip(vibration_reduction_pct / 100.0, -1.0, 1.0))
+    effort_term = float(np.clip(1.0 - rms_current_a / current_limit_a, -1.0, 1.0))
+    return 100.0 * (0.70 * vibration_term + 0.30 * effort_term)
+
+
+def run_robust_evaluation(
+    model_path=DEFAULT_MODEL_PATH,
+    amplitudes_n=ROBUST_AMPLITUDES_N,
+    frequencies_hz=ROBUST_FREQUENCIES_HZ,
+    phases_rad=ROBUST_PHASES_RAD,
+    duration_s=ROBUST_DEFAULT_DURATION_S,
+    plant_variations=None,
+    process_noise_std_n=0.0,
+    process_noise_seed=42,
+    harmonic_amplitudes_ratio=None,
+    harmonic_phase_rad=None,
+    cutting_force_noise_std_n=0.0,
+    cutting_force_noise_seed=42,
+    pid_gains=None,
+):
+    """Evaluate all controllers over a grid of operating conditions.
+
+    Every controller sees the same plant, cutting-force waveform, cutting-force
+    noise seed, and process-noise seed for each condition.
+    """
+    amplitudes_n = tuple(float(x) for x in amplitudes_n)
+    frequencies_hz = tuple(float(x) for x in frequencies_hz)
+    phases_rad = tuple(float(x) for x in phases_rad)
+
+    if not amplitudes_n or not frequencies_hz or not phases_rad:
+        raise ValueError("Robust evaluation requires non-empty amplitude, frequency, and phase grids.")
+    if duration_s <= 0 or duration_s > 2.0:
+        raise ValueError("Robust evaluation duration must be in (0, 2] seconds.")
+
+    total_conditions = len(amplitudes_n) * len(frequencies_hz) * len(phases_rad)
+    if total_conditions > 500:
+        raise ValueError("Robust evaluation is limited to 500 operating conditions per run.")
+
+    # Load SAC once rather than once per condition.
+    model = None
+    if not get_model_status(model_path)["model_exists"]:
+        raise FileNotFoundError(get_model_status(model_path)["message"])
+    model = _load_sac_model(str(model_path))
+
+    rows = []
+    case_index = 0
+
+    for amplitude_n in amplitudes_n:
+        for frequency_hz in frequencies_hz:
+            for phase_rad in phases_rad:
+                case_index += 1
+                case_results = {}
+
+                for controller_name in ALLOWED_CONTROLLERS:
+                    result = run_simulation(
+                        controller_name=controller_name,
+                        amplitude_n=amplitude_n,
+                        frequency_hz=frequency_hz,
+                        phase_rad=phase_rad,
+                        duration_s=duration_s,
+                        model_path=model_path,
+                        plant_variations=plant_variations,
+                        process_noise_std_n=process_noise_std_n,
+                        process_noise_seed=process_noise_seed,
+                        harmonic_amplitudes_ratio=harmonic_amplitudes_ratio,
+                        harmonic_phase_rad=harmonic_phase_rad,
+                        cutting_force_noise_std_n=cutting_force_noise_std_n,
+                        cutting_force_noise_seed=cutting_force_noise_seed,
+                        pid_gains=pid_gains,
+                    )
+                    case_results[controller_name] = result["metrics"]
+
+                baseline = case_results["No control"]
+                for controller_name, metrics in case_results.items():
+                    baseline_rms = baseline["steady_rms_vibration_um"]
+                    current_rms = metrics["rms_control_current_a"]
+                    reduction = (
+                        100.0 * (1.0 - metrics["steady_rms_vibration_um"] / baseline_rms)
+                        if baseline_rms > 0
+                        else 0.0
+                    )
+
+                    rows.append({
+                        "case": case_index,
+                        "controller": controller_name,
+                        "amplitude_n": amplitude_n,
+                        "frequency_hz": frequency_hz,
+                        "phase_rad": phase_rad,
+                        "steady_rms_vibration_um": metrics["steady_rms_vibration_um"],
+                        "rms_vibration_um": metrics["rms_vibration_um"],
+                        "peak_vibration_um": metrics["peak_vibration_um"],
+                        "rms_control_current_a": current_rms,
+                        "peak_control_current_a": metrics["peak_control_current_a"],
+                        "near_saturation_percent": 100.0 * metrics["actuator_near_saturation_fraction"],
+                        "hard_saturation_percent": 100.0 * metrics["actuator_saturation_fraction"],
+                        "steady_rms_reduction_vs_no_control_percent": reduction,
+                    })
+
+    frame = pd.DataFrame(rows)
+
+    summary_rows = []
+    for controller_name in ALLOWED_CONTROLLERS:
+        subset = frame[frame["controller"] == controller_name].copy()
+        reductions = subset["steady_rms_reduction_vs_no_control_percent"]
+        current_limit = PLANT.continuous_current_limit_a
+        summary_rows.append({
+            "controller": controller_name,
+            "cases": int(len(subset)),
+            "mean_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].mean()),
+            "median_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].median()),
+            "worst_case_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].max()),
+            "mean_peak_vibration_um": float(subset["peak_vibration_um"].mean()),
+            "mean_rms_control_current_a": float(subset["rms_control_current_a"].mean()),
+            "mean_hard_saturation_percent": float(subset["hard_saturation_percent"].mean()),
+            "mean_vibration_reduction_percent": float(reductions.mean()),
+            "worst_vibration_reduction_percent": float(reductions.min()),
+            "success_rate_percent": float(np.mean(reductions > 0.0) * 100.0),
+            "composite_robust_score": _robust_score(
+                float(reductions.mean()),
+                float(subset["rms_control_current_a"].mean()),
+                float(subset["hard_saturation_percent"].mean()),
+                current_limit,
+            ),
+        })
+
+    summary = pd.DataFrame(summary_rows)
+
+    return {
+        "simulation_only": True,
+        "conditions": {
+            "amplitudes_n": list(amplitudes_n),
+            "frequencies_hz": list(frequencies_hz),
+            "phases_rad": list(phases_rad),
+            "duration_s": float(duration_s),
+            "total_conditions": int(total_conditions),
+        },
+        "pid_gains": pid_gains or {
+            "kp": 180000.0, "ki": 0.0, "kd": 0.0, "integral_limit_m_s": 1.0e-3
+        },
+        "summary": summary.to_dict(orient="records"),
+        "cases": frame.to_dict(orient="records"),
+        "score_definition": {
+            "vibration_weight": 0.70,
+            "effort_weight": 0.30,
+            "description": "70% mean vibration reduction vs No Control + 30% low RMS-current term; saturation is reported separately.",
+        },
+    }

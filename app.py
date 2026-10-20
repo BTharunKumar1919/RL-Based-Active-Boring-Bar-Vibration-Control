@@ -116,6 +116,24 @@ def make_comparison_table(results):
     return pd.DataFrame(rows)
 
 
+def make_robust_summary_table(summary):
+    rows = []
+    for item in summary:
+        rows.append({
+            "Controller": item["controller"],
+            "Mean steady RMS (µm)": item["mean_steady_rms_vibration_um"],
+            "Worst-case steady RMS (µm)": item["worst_case_steady_rms_vibration_um"],
+            "Mean peak (µm)": item["mean_peak_vibration_um"],
+            "Mean RMS current (A)": item["mean_rms_control_current_a"],
+            "Mean saturation (%)": item["mean_hard_saturation_percent"],
+            "Mean vibration reduction (%)": item["mean_vibration_reduction_percent"],
+            "Worst vibration reduction (%)": item["worst_vibration_reduction_percent"],
+            "Success rate (%)": item["success_rate_percent"],
+            "Robust score": item["composite_robust_score"],
+        })
+    return pd.DataFrame(rows)
+
+
 def make_trace_plot(traces, y_column, title, y_label):
     fig = go.Figure()
 
@@ -507,6 +525,42 @@ with st.sidebar:
         step=0.02,
     )
 
+    with st.expander("PID controller parameters", expanded=False):
+        st.caption("These gains apply to PID in both single-condition and robust evaluation.")
+
+        pid_kp = st.number_input(
+            "Kp (A/m)",
+            min_value=0.0,
+            max_value=1.0e6,
+            value=180000.0,
+            step=5000.0,
+            format="%.1f",
+        )
+        pid_ki = st.number_input(
+            "Ki (A/(m·s))",
+            min_value=0.0,
+            max_value=1.0e9,
+            value=0.0,
+            step=10000.0,
+            format="%.3g",
+        )
+        pid_kd = st.number_input(
+            "Kd (A/(m/s))",
+            min_value=0.0,
+            max_value=1.0e6,
+            value=0.0,
+            step=100.0,
+            format="%.3g",
+        )
+        pid_integral_limit = st.number_input(
+            "Integral error limit (m·s)",
+            min_value=1.0e-6,
+            max_value=1.0e-1,
+            value=1.0e-3,
+            step=1.0e-4,
+            format="%.2e",
+        )
+
     st.divider()
 
     st.subheader("Plant & actuator model")
@@ -587,6 +641,99 @@ except requests.RequestException as exc:
 
 
 # ---------------------------------------------------------------------
+# Robust evaluation
+# ---------------------------------------------------------------------
+
+st.divider()
+st.subheader("Robust evaluation")
+st.write(
+    "Evaluate No Control, PID, and SAC over the standard 3 × 7 × 4 operating-condition grid "
+    "(amplitude × frequency × phase). The same plant and noise realization is used for all controllers."
+)
+
+robust_duration_s = st.number_input(
+    "Robust evaluation duration per case (s)",
+    min_value=0.02,
+    max_value=0.5,
+    value=0.2,
+    step=0.02,
+    key="robust_duration",
+)
+
+robust_run = st.button(
+    "Run standard robust evaluation (84 cases)",
+    use_container_width=True,
+)
+
+if robust_run:
+    robust_payload = {
+        "amplitudes_n": [0.5, 1.0, 1.5],
+        "frequencies_hz": [150.0, 160.0, 174.0, 185.0, 200.0, 205.0, 215.0],
+        "phases_rad": [0.0, float(np.pi / 2.0), float(np.pi), float(3.0 * np.pi / 2.0)],
+        "duration_s": float(robust_duration_s),
+        "plant_variations": plant_variations,
+        "process_noise_std_n": float(process_noise_std_n),
+        "process_noise_seed": int(process_noise_seed),
+        "harmonic_amplitudes_ratio": harmonic_amplitudes_ratio,
+        "harmonic_phase_rad": harmonic_phase_rad,
+        "cutting_force_noise_std_n": float(cutting_force_noise_std_n),
+        "cutting_force_noise_seed": int(cutting_force_noise_seed),
+        "pid_gains": {
+            "kp": float(pid_kp),
+            "ki": float(pid_ki),
+            "kd": float(pid_kd),
+            "integral_limit_m_s": float(pid_integral_limit),
+        },
+    }
+
+    try:
+        with st.spinner("Running 84-condition robust evaluation... this may take a while."):
+            robust_result = api_post("/robust-evaluation", robust_payload)
+        st.session_state["robust_result"] = robust_result
+        st.success("Robust evaluation completed.")
+    except requests.HTTPError as exc:
+        detail = exc.response.text if exc.response is not None else str(exc)
+        st.error(f"API returned an error: {detail}")
+    except requests.RequestException as exc:
+        st.error(f"Robust evaluation request failed: {exc}")
+
+if "robust_result" in st.session_state:
+    robust_result = st.session_state["robust_result"]
+    robust_summary = make_robust_summary_table(robust_result["summary"])
+
+    st.markdown("**Robust summary**")
+    st.dataframe(
+        robust_summary.style.format({
+            "Mean steady RMS (µm)": "{:.4f}",
+            "Worst-case steady RMS (µm)": "{:.4f}",
+            "Mean peak (µm)": "{:.4f}",
+            "Mean RMS current (A)": "{:.4f}",
+            "Mean saturation (%)": "{:.2f}",
+            "Mean vibration reduction (%)": "{:.2f}",
+            "Worst vibration reduction (%)": "{:.2f}",
+            "Success rate (%)": "{:.1f}",
+            "Robust score": "{:.2f}",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "Robust score = 70% mean vibration reduction versus No Control + 30% low-RMS-current term. "
+        "Saturation is reported separately. It is a project comparison metric, not a physical standard."
+    )
+
+    robust_cases = pd.DataFrame(robust_result["cases"])
+    st.download_button(
+        "Download robust evaluation cases (CSV)",
+        data=to_csv_bytes(robust_cases),
+        file_name="robust_evaluation_cases.csv",
+        mime="text/csv",
+        key="download_robust_cases",
+    )
+
+
+# ---------------------------------------------------------------------
 # Run simulations
 # ---------------------------------------------------------------------
 
@@ -618,6 +765,12 @@ if run_clicked:
         "plant_variations": plant_variations,
         "process_noise_std_n": float(process_noise_std_n),
         "process_noise_seed": int(process_noise_seed),
+        "pid_gains": {
+            "kp": float(pid_kp),
+            "ki": float(pid_ki),
+            "kd": float(pid_kd),
+            "integral_limit_m_s": float(pid_integral_limit),
+        },
     }
 
     try:
@@ -736,6 +889,11 @@ c3.metric(
 c4.metric(
     "Duration",
     f"{run_inputs['duration_s']:.2f} s",
+)
+st.caption(
+    f"PID gains: Kp={run_inputs.get('pid_gains', {}).get('kp', 180000.0):.3g}, "
+    f"Ki={run_inputs.get('pid_gains', {}).get('ki', 0.0):.3g}, "
+    f"Kd={run_inputs.get('pid_gains', {}).get('kd', 0.0):.3g}"
 )
 
 
@@ -1021,7 +1179,8 @@ with st.expander("Model assumptions and limitations"):
           harmonic cutting-force disturbance.
         - The SAC policy is loaded from a previously trained model;
           this dashboard does not train it.
-        - PID uses fixed gains; SAC uses a learned policy.
+        - PID gains are user-configurable from the dashboard; SAC uses a learned policy.
+        - Robust evaluation uses the standard amplitude/frequency/phase grid and reports both per-case and aggregate metrics.
         - Sensor noise, Kalman filtering, amplifier dynamics, and
           randomized plant parameters are not included in this phase.
         - The SAC action is mapped to the 5 A continuous current limit

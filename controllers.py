@@ -18,10 +18,13 @@ class NoControl:
 class PIDController:
     """PID controller whose output is current in amperes.
 
-    Units: kp [A/m], ki [A/(m s)], kd [A/(m/s)].
-    The gains must be retuned for the new plant and current-limited output.
+    Units:
+        kp [A/m], ki [A/(m s)], kd [A/(m/s)].
+
+    The gains are deliberately configurable from the dashboard so the PID
+    can be retuned for different plant models instead of being hard-coded.
     """
-    kp: float = 180000
+    kp: float = 180000.0
     ki: float = 0.0
     kd: float = 0.0
     plant_config: PlantConfig = PLANT
@@ -40,18 +43,38 @@ class PIDController:
     def act(self, displacement_m, velocity_m_s, dt_s):
         if dt_s <= 0:
             raise ValueError("dt_s must be positive.")
+
         x = float(displacement_m)
         v = float(velocity_m_s)
-        candidate_integral = float(np.clip(
-            self.integral_error + x * dt_s,
-            -self.integral_limit_m_s,
-            self.integral_limit_m_s,
-        ))
-        unsaturated_current = -self.kp*x - self.kd*v - self.ki*candidate_integral
+
+        candidate_integral = float(
+            np.clip(
+                self.integral_error + x * dt_s,
+                -self.integral_limit_m_s,
+                self.integral_limit_m_s,
+            )
+        )
+
+        unsaturated_current = (
+            -self.kp * x
+            -self.kd * v
+            -self.ki * candidate_integral
+        )
+
         limit = self.plant_config.continuous_current_limit_a
-        current = float(np.clip(unsaturated_current, -limit, limit))
+        current = float(
+            np.clip(
+                unsaturated_current,
+                -limit,
+                limit,
+            )
+        )
+
         sat_high = unsaturated_current > limit
         sat_low = unsaturated_current < -limit
+
+        # Simple conditional-integration anti-windup.
         if not ((sat_high and x < 0) or (sat_low and x > 0)):
             self.integral_error = candidate_integral
+
         return current

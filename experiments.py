@@ -84,6 +84,7 @@ def simulate_controller(
     plant_config=PLANT,
     process_noise_std_n=0.0,
     process_noise_seed=None,
+    pid_gains=None,
 ):
     """Simulate one controller under one disturbance condition."""
 
@@ -109,8 +110,13 @@ def simulate_controller(
 
     elif controller_name == "PID":
 
+        pid_gains = {} if pid_gains is None else dict(pid_gains)
         controller = PIDController(
-            plant_config=plant_config
+            kp=float(pid_gains.get("kp", 180000.0)),
+            ki=float(pid_gains.get("ki", 0.0)),
+            kd=float(pid_gains.get("kd", 0.0)),
+            integral_limit_m_s=float(pid_gains.get("integral_limit_m_s", 1.0e-3)),
+            plant_config=plant_config,
         )
 
     elif controller_name == "SAC":
@@ -325,7 +331,7 @@ def simulate_controller(
     )
 
 
-def calculate_metrics(data):
+def calculate_metrics(data, plant_config=PLANT):
     """Calculate vibration and actuator metrics."""
 
     if len(data) == 0:
@@ -354,9 +360,7 @@ def calculate_metrics(data):
         current[start:]
     )
 
-    limit = (
-        PLANT.continuous_current_limit_a
-    )
+    limit = plant_config.continuous_current_limit_a
 
     near_saturation = (
         np.abs(current)
