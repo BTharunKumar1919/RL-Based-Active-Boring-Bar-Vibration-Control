@@ -346,13 +346,49 @@ with st.expander("1. Experiment configuration", expanded=True):
         "plant_preset": adv_preset, "variations": variations, "cutting_force": cutting_force_cfg,
         "noise": {"process_std_n": process_noise, "sensor_std_m": sensor_noise_um * 1e-6},
         "duration_s": adv_duration, "seed": int(adv_seed)}
-    if st.button("Run configurable experiment", type="primary", key="run_advanced_experiment"):
+    if st.button("Run selected-controller experiment (single)", type="primary", key="run_advanced_experiment"):
         try:
             with st.spinner("Running configurable simulation..."):
                 adv_result = api_post("/experiment/simulate", advanced_payload)
             st.session_state["advanced_result"] = adv_result
         except requests.HTTPError as exc:
             st.error(f"Experiment failed: {exc.response.text if exc.response is not None else exc}")
+        except requests.RequestException as exc:
+            st.error(f"Could not reach the API: {exc}")
+
+    compare_advanced = st.button(
+        "Run configurable comparison (No control, PID, SAC)",
+        key="run_advanced_comparison",
+        help="Runs all three controllers using the advanced plant, force, noise, duration, and seed settings above. SAC uses the selected registered policy.",
+    )
+    if compare_advanced:
+        try:
+            with st.spinner("Running all three controllers with the advanced settings..."):
+                advanced_traces = {}
+                advanced_metrics = []
+                warnings = []
+                for controller_name in CONTROLLERS:
+                    comparison_payload = {**advanced_payload, "controller": controller_name}
+                    result = api_post("/experiment/simulate", comparison_payload)
+                    advanced_traces[controller_name] = pd.DataFrame(result["timeseries"])
+                    advanced_metrics.append({"controller": controller_name, **result["metrics"]})
+                    if result.get("warning"):
+                        warnings.append(f"{controller_name}: {result['warning']}")
+                st.session_state["traces"] = advanced_traces
+                st.session_state["metrics_results"] = advanced_metrics
+                st.session_state["simulation_inputs"] = {
+                    "amplitude_n": force_amp,
+                    "frequency_hz": force_freq,
+                    "phase_rad": force_phase,
+                    "duration_s": adv_duration,
+                }
+                st.session_state["simulation_source"] = "advanced"
+                st.session_state["advanced_comparison_warnings"] = warnings
+                st.success("Configurable comparison completed. The comparison charts below now use these advanced settings.")
+                for warning in warnings:
+                    st.warning(warning)
+        except requests.HTTPError as exc:
+            st.error(f"Configurable comparison failed: {exc.response.text if exc.response is not None else exc}")
         except requests.RequestException as exc:
             st.error(f"Could not reach the API: {exc}")
 
@@ -418,6 +454,11 @@ st.divider()
 # ---------------------------------------------------------------------
 
 st.subheader("Run comparison")
+
+if st.session_state.get("simulation_source") == "advanced":
+    st.info("The charts below show the latest configurable comparison, generated from the advanced experiment settings above. To change them, edit those settings and run the configurable comparison again.")
+else:
+    st.info("These charts use the basic sidebar settings. The advanced experiment panel above is a separate workflow unless you run its configurable comparison button.")
 
 st.write(
     "All three controllers are evaluated with the same disturbance "
@@ -571,8 +612,8 @@ with tab_metrics:
             "Steady RMS (µm)": "{:.4f}",
             "Overall RMS (µm)": "{:.4f}",
             "Peak vibration (µm)": "{:.4f}",
-            "RMS force (N)": "{:.4f}",
-            "Peak force (N)": "{:.4f}",
+            "RMS current (A)": "{:.4f}",
+            "Peak current (A)": "{:.4f}",
             "Saturation (%)": "{:.2f}",
         }, na_rep="N/A"),
         use_container_width=True,
@@ -606,9 +647,9 @@ with tab_metrics:
         st.plotly_chart(
             make_bar_chart(
                 table,
-                "RMS force (N)",
+                "RMS current (A)",
                 "RMS control effort",
-                "RMS force (N)",
+                "RMS current (A)",
             ),
             use_container_width=True,
         )

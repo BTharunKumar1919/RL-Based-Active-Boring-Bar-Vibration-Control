@@ -32,3 +32,38 @@ def test_short_no_control_experiment_returns_metrics_and_trace():
         "noise":{"process_std_n":0,"sensor_std_m":0}})
     assert len(result["timeseries"]) == 100
     assert "steady_rms_vibration_um" in result["metrics"]
+
+def test_changing_force_amplitude_changes_simulated_response():
+    common = {
+        "controller": "No control",
+        "duration_s": 0.1,
+        "seed": 1,
+        "noise": {"process_std_n": 0, "sensor_std_m": 0},
+    }
+    one_newton = simulate_experiment({
+        **common,
+        "cutting_force": {"kind": "sinusoidal", "amplitude_n": 1, "frequency_hz": 174, "phase_rad": 0},
+    })
+    two_newtons = simulate_experiment({
+        **common,
+        "cutting_force": {"kind": "sinusoidal", "amplitude_n": 2, "frequency_hz": 174, "phase_rad": 0},
+    })
+    assert not np.isclose(
+        one_newton["metrics"]["rms_vibration_um"],
+        two_newtons["metrics"]["rms_vibration_um"],
+    )
+
+def test_changing_pid_plant_mode_changes_controlled_response():
+    common = {
+        "controller": "PID",
+        "duration_s": 0.1,
+        "seed": 1,
+        "cutting_force": {"kind": "sinusoidal", "amplitude_n": 1, "frequency_hz": 174, "phase_rad": 0},
+        "noise": {"process_std_n": 0, "sensor_std_m": 0},
+    }
+    nominal = simulate_experiment({**common, "variations": {}})
+    varied = simulate_experiment({**common, "variations": {"mode_2": {"frequency_pct": 10}}})
+    assert not np.isclose(
+        nominal["metrics"]["rms_vibration_um"],
+        varied["metrics"]["rms_vibration_um"],
+    )
