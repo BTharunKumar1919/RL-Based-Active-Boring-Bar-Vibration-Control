@@ -60,6 +60,16 @@ class DisturbanceConfig:
     frequency_hz: float = 174.0
     phase_rad: float = 0.0
 
+    # Optional Fourier harmonics. Each entry corresponds to harmonic n=2, 3, ...
+    # and is expressed as a fraction of the fundamental amplitude.
+    harmonic_amplitudes_ratio: tuple = ()
+    harmonic_phase_rad: tuple = ()
+
+    # Optional additive cutting-force noise, independent of plant process noise.
+    # This is sampled once per physical plant step.
+    noise_std_n: float = 0.0
+    noise_seed: int = 42
+
 
 @dataclass(frozen=True)
 class TrainingConfig:

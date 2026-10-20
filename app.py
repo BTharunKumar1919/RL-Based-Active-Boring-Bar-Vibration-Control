@@ -429,6 +429,76 @@ with st.sidebar:
         step=0.1,
     )
 
+    with st.expander("Cutting-force harmonics & noise", expanded=False):
+        harmonic_count = st.number_input(
+            "Number of harmonics",
+            min_value=0,
+            max_value=5,
+            value=0,
+            step=1,
+            help="Adds harmonics 2f, 3f, ... as percentages of the fundamental amplitude.",
+        )
+
+        harmonic_amplitudes_ratio = []
+        harmonic_phase_rad = []
+
+        for order in range(2, int(harmonic_count) + 2):
+            amplitude_percent = st.slider(
+                f"{order}f amplitude (% of fundamental)",
+                min_value=0.0,
+                max_value=100.0,
+                value=0.0,
+                step=5.0,
+                key=f"harmonic_{order}_amplitude",
+            )
+
+            phase = st.slider(
+                f"{order}f phase (rad)",
+                min_value=-3.14,
+                max_value=3.14,
+                value=0.0,
+                step=0.1,
+                key=f"harmonic_{order}_phase",
+            )
+
+            harmonic_amplitudes_ratio.append(
+                float(amplitude_percent) / 100.0
+            )
+            harmonic_phase_rad.append(float(phase))
+
+        cutting_force_noise_std_n = st.slider(
+            "Cutting-force noise RMS (N)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.01,
+            help=(
+                "Adds zero-mean Gaussian noise directly to the cutting-force "
+                "disturbance at each 0.1 ms plant step. This is different from "
+                "plant process noise."
+            ),
+        )
+
+        cutting_force_noise_seed = st.number_input(
+            "Cutting-force noise seed",
+            min_value=0,
+            max_value=2_147_483_647,
+            value=42,
+            step=1,
+        )
+
+        if harmonic_count > 0:
+            st.caption(
+                "Harmonics are integer multiples of the fundamental frequency "
+                "with independently specified amplitude and phase."
+            )
+
+        if cutting_force_noise_std_n > 0:
+            st.caption(
+                f"Cutting-force noise enabled: {cutting_force_noise_std_n:.2f} N RMS "
+                f"(seed {int(cutting_force_noise_seed)})."
+            )
+
     duration_s = st.slider(
         "Simulation duration (s)",
         min_value=0.02,
@@ -541,6 +611,10 @@ if run_clicked:
         "frequency_hz": frequency_hz,
         "phase_rad": phase_rad,
         "duration_s": duration_s,
+        "harmonic_amplitudes_ratio": harmonic_amplitudes_ratio,
+        "harmonic_phase_rad": harmonic_phase_rad,
+        "cutting_force_noise_std_n": float(cutting_force_noise_std_n),
+        "cutting_force_noise_seed": int(cutting_force_noise_seed),
         "plant_variations": plant_variations,
         "process_noise_std_n": float(process_noise_std_n),
         "process_noise_seed": int(process_noise_seed),
@@ -665,20 +739,28 @@ c4.metric(
 )
 
 
-meta1, meta2, meta3 = st.columns(3)
+meta1, meta2, meta3, meta4, meta5 = st.columns(5)
 
 if run_metadata:
     meta1.metric(
-        "SAC history",
-        f"{run_metadata.get('observation_history_length', 8)} states",
+        "Harmonics",
+        f"{len(run_inputs.get('harmonic_amplitudes_ratio', []))}",
     )
     meta2.metric(
-        "SAC action interval",
-        f"{run_metadata.get('sac_action_interval_s', 0.0005) * 1e3:.2f} ms",
+        "Cutting-force noise",
+        f"{run_inputs.get('cutting_force_noise_std_n', 0.0):.2f} N RMS",
     )
     meta3.metric(
         "Process noise",
         f"{run_inputs.get('process_noise_std_n', 0.0):.2f} N RMS",
+    )
+    meta4.metric(
+        "SAC history",
+        f"{run_metadata.get('observation_history_length', 8)} states",
+    )
+    meta5.metric(
+        "SAC action interval",
+        f"{run_metadata.get('sac_action_interval_s', 0.0005) * 1e3:.2f} ms",
     )
 
 

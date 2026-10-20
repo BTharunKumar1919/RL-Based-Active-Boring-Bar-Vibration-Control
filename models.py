@@ -153,7 +153,22 @@ def build_plant_config(variations=None, max_percent=20.0):
 
 
 class SinusoidalCuttingForce:
-    """Prescribed harmonic disturbance; not a regenerative chatter model."""
+    """Prescribed harmonic cutting-force disturbance.
+
+    The fundamental is
+
+        A1 sin(2*pi*f*t + phi1)
+
+    and optional harmonics are added as
+
+        A1*r_n sin(2*pi*(n*f)*t + phi_n).
+
+    ``harmonic_amplitudes_ratio`` contains ratios for n=2,3,..., while
+    ``harmonic_phase_rad`` contains the corresponding absolute phase offsets.
+    Optional Gaussian cutting-force noise is sampled once per physical plant
+    step. This remains a prescribed disturbance; it is not a regenerative
+    chatter model.
+    """
 
     def __init__(self, config: DisturbanceConfig = DISTURBANCE):
         if config.amplitude_n < 0:
@@ -166,16 +181,97 @@ class SinusoidalCuttingForce:
                 "Disturbance frequency must be non-negative."
             )
 
+        if config.noise_std_n < 0:
+            raise ValueError(
+                "Cutting-force noise standard deviation must be non-negative."
+            )
+
+        if isinstance(config.noise_seed, bool) or not isinstance(config.noise_seed, int):
+            raise ValueError(
+                "Cutting-force noise seed must be an integer."
+            )
+
+        amplitudes = tuple(float(x) for x in config.harmonic_amplitudes_ratio)
+        phases = tuple(float(x) for x in config.harmonic_phase_rad)
+
+        if len(amplitudes) != len(phases):
+            raise ValueError(
+                "Harmonic amplitude and phase lists must have the same length."
+            )
+
+        if len(amplitudes) > 10:
+            raise ValueError(
+                "At most 10 harmonics can be specified."
+            )
+
+        if any((not np.isfinite(x)) or x < 0 for x in amplitudes):
+            raise ValueError(
+                "Harmonic amplitude ratios must be finite and non-negative."
+            )
+
+        if any(not np.isfinite(x) for x in phases):
+            raise ValueError(
+                "Harmonic phases must be finite."
+            )
+
         self.config = config
+        self.harmonic_amplitudes_ratio = amplitudes
+        self.harmonic_phase_rad = phases
+        self.rng = np.random.default_rng(config.noise_seed)
+        self.last_fundamental_force_n = 0.0
+        self.last_harmonic_force_n = 0.0
+        self.last_noise_n = 0.0
+        self.last_deterministic_force_n = 0.0
+        self.last_total_force_n = 0.0
 
     def __call__(self, time_s: float) -> float:
-        return self.config.amplitude_n * math.sin(
+        fundamental = self.config.amplitude_n * math.sin(
             2.0
             * math.pi
             * self.config.frequency_hz
             * time_s
             + self.config.phase_rad
         )
+
+        harmonic = 0.0
+        for index, (ratio, phase) in enumerate(
+            zip(
+                self.harmonic_amplitudes_ratio,
+                self.harmonic_phase_rad,
+            ),
+            start=2,
+        ):
+            harmonic += (
+                self.config.amplitude_n
+                * ratio
+                * math.sin(
+                    2.0
+                    * math.pi
+                    * (index * self.config.frequency_hz)
+                    * time_s
+                    + phase
+                )
+            )
+
+        noise = 0.0
+        if self.config.noise_std_n > 0.0:
+            noise = float(
+                self.rng.normal(
+                    0.0,
+                    self.config.noise_std_n,
+                )
+            )
+
+        deterministic = fundamental + harmonic
+        total = deterministic + noise
+
+        self.last_fundamental_force_n = float(fundamental)
+        self.last_harmonic_force_n = float(harmonic)
+        self.last_noise_n = float(noise)
+        self.last_deterministic_force_n = float(deterministic)
+        self.last_total_force_n = float(total)
+
+        return self.last_total_force_n
 
 
 class SevenModePlant:

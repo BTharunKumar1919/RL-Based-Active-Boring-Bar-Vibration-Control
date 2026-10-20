@@ -288,6 +288,18 @@ def simulate_controller(
                     next_state.velocity_m_s
                     * 1e3,
 
+                "fundamental_force_n":
+                    force_model.last_fundamental_force_n,
+
+                "harmonic_force_n":
+                    force_model.last_harmonic_force_n,
+
+                "cutting_force_noise_n":
+                    force_model.last_noise_n,
+
+                "deterministic_cutting_force_n":
+                    force_model.last_deterministic_force_n,
+
                 "disturbance_force_n":
                     disturbance_n,
 

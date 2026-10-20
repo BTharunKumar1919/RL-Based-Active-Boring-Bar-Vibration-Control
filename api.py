@@ -10,6 +10,8 @@ from deployment_service import (
     DEFAULT_MODEL_PATH,
     MAX_PLANT_VARIATION_PERCENT,
     MAX_PROCESS_NOISE_STD_N,
+    MAX_CUTTING_FORCE_NOISE_STD_N,
+    MAX_HARMONICS,
     compare_controllers,
     get_model_status,
     run_simulation,
@@ -81,6 +83,27 @@ class SimulationRequest(BaseModel):
         ge=0,
     )
 
+    harmonic_amplitudes_ratio: list[float] = Field(
+        default_factory=list,
+        description="Relative amplitudes of harmonics 2, 3, ... as fractions of the fundamental.",
+    )
+
+    harmonic_phase_rad: list[float] = Field(
+        default_factory=list,
+        description="Absolute phase of harmonics 2, 3, ... in radians.",
+    )
+
+    cutting_force_noise_std_n: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=MAX_CUTTING_FORCE_NOISE_STD_N,
+    )
+
+    cutting_force_noise_seed: int = Field(
+        default=42,
+        ge=0,
+    )
+
 
 class ComparisonRequest(BaseModel):
     amplitude_n: float = Field(
@@ -122,6 +145,27 @@ class ComparisonRequest(BaseModel):
         ge=0,
     )
 
+    harmonic_amplitudes_ratio: list[float] = Field(
+        default_factory=list,
+        description="Relative amplitudes of harmonics 2, 3, ... as fractions of the fundamental.",
+    )
+
+    harmonic_phase_rad: list[float] = Field(
+        default_factory=list,
+        description="Absolute phase of harmonics 2, 3, ... in radians.",
+    )
+
+    cutting_force_noise_std_n: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=MAX_CUTTING_FORCE_NOISE_STD_N,
+    )
+
+    cutting_force_noise_seed: int = Field(
+        default=42,
+        ge=0,
+    )
+
 
 @app.get("/")
 def root():
@@ -149,6 +193,8 @@ def health():
         "process_noise_max_std_n": (
             MAX_PROCESS_NOISE_STD_N
         ),
+        "cutting_force_noise_max_std_n": MAX_CUTTING_FORCE_NOISE_STD_N,
+        "max_harmonics": MAX_HARMONICS,
     }
 
 
@@ -172,6 +218,10 @@ def simulate(request: SimulationRequest):
             plant_variations=request.plant_variations,
             process_noise_std_n=request.process_noise_std_n,
             process_noise_seed=request.process_noise_seed,
+            harmonic_amplitudes_ratio=request.harmonic_amplitudes_ratio,
+            harmonic_phase_rad=request.harmonic_phase_rad,
+            cutting_force_noise_std_n=request.cutting_force_noise_std_n,
+            cutting_force_noise_seed=request.cutting_force_noise_seed,
         )
 
     except FileNotFoundError as exc:
@@ -209,6 +259,10 @@ def compare(request: ComparisonRequest):
                 plant_variations=request.plant_variations,
                 process_noise_std_n=request.process_noise_std_n,
                 process_noise_seed=request.process_noise_seed,
+                harmonic_amplitudes_ratio=request.harmonic_amplitudes_ratio,
+                harmonic_phase_rad=request.harmonic_phase_rad,
+                cutting_force_noise_std_n=request.cutting_force_noise_std_n,
+                cutting_force_noise_seed=request.cutting_force_noise_seed,
             ),
         }
 

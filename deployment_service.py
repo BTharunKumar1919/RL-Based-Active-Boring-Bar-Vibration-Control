@@ -31,6 +31,8 @@ ALLOWED_CONTROLLERS = (
 
 MAX_PLANT_VARIATION_PERCENT = 20.0
 MAX_PROCESS_NOISE_STD_N = 1.0
+MAX_CUTTING_FORCE_NOISE_STD_N = 1.0
+MAX_HARMONICS = 5
 
 
 @lru_cache(maxsize=2)
@@ -63,6 +65,10 @@ def run_simulation(
     plant_variations=None,
     process_noise_std_n=0.0,
     process_noise_seed=42,
+    harmonic_amplitudes_ratio=None,
+    harmonic_phase_rad=None,
+    cutting_force_noise_std_n=0.0,
+    cutting_force_noise_seed=42,
 ):
     """Run one controller on one disturbance and one plant model."""
 
@@ -77,6 +83,7 @@ def run_simulation(
         "phase_rad": phase_rad,
         "duration_s": duration_s,
         "process_noise_std_n": process_noise_std_n,
+        "cutting_force_noise_std_n": cutting_force_noise_std_n,
     }
 
     for name, value in values.items():
@@ -107,6 +114,25 @@ def run_simulation(
     if isinstance(process_noise_seed, bool) or not isinstance(process_noise_seed, int):
         raise ValueError("process_noise_seed must be an integer.")
 
+    if cutting_force_noise_std_n < 0 or cutting_force_noise_std_n > MAX_CUTTING_FORCE_NOISE_STD_N:
+        raise ValueError(f"cutting_force_noise_std_n must be between 0 and {MAX_CUTTING_FORCE_NOISE_STD_N:.2f} N.")
+
+    if isinstance(cutting_force_noise_seed, bool) or not isinstance(cutting_force_noise_seed, int):
+        raise ValueError("cutting_force_noise_seed must be an integer.")
+
+    harmonic_amplitudes_ratio = [] if harmonic_amplitudes_ratio is None else list(harmonic_amplitudes_ratio)
+    harmonic_phase_rad = [] if harmonic_phase_rad is None else list(harmonic_phase_rad)
+    if len(harmonic_amplitudes_ratio) != len(harmonic_phase_rad):
+        raise ValueError("harmonic_amplitudes_ratio and harmonic_phase_rad must have the same length.")
+    if len(harmonic_amplitudes_ratio) > MAX_HARMONICS:
+        raise ValueError(f"At most {MAX_HARMONICS} harmonics are allowed.")
+    for index, value in enumerate(harmonic_amplitudes_ratio, start=2):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value < 0 or value > 1.0:
+            raise ValueError(f"Harmonic {index} amplitude ratio must be between 0 and 1.")
+    for index, value in enumerate(harmonic_phase_rad, start=2):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+            raise ValueError(f"Harmonic {index} phase must be finite.")
+
     plant_config = build_plant_config(
         plant_variations,
         max_percent=MAX_PLANT_VARIATION_PERCENT,
@@ -122,9 +148,13 @@ def run_simulation(
         )
 
     disturbance = DisturbanceConfig(
-        float(amplitude_n),
-        float(frequency_hz),
-        float(phase_rad),
+        amplitude_n=float(amplitude_n),
+        frequency_hz=float(frequency_hz),
+        phase_rad=float(phase_rad),
+        harmonic_amplitudes_ratio=tuple(float(value) for value in harmonic_amplitudes_ratio),
+        harmonic_phase_rad=tuple(float(value) for value in harmonic_phase_rad),
+        noise_std_n=float(cutting_force_noise_std_n),
+        noise_seed=int(cutting_force_noise_seed),
     )
 
     model = None
@@ -178,9 +208,20 @@ def run_simulation(
             "frequency_hz": float(frequency_hz),
             "phase_rad": float(phase_rad),
             "duration_s": float(duration_s),
+            "harmonic_amplitudes_ratio": [float(value) for value in harmonic_amplitudes_ratio],
+            "harmonic_phase_rad": [float(value) for value in harmonic_phase_rad],
+            "cutting_force_noise_std_n": float(cutting_force_noise_std_n),
+            "cutting_force_noise_seed": int(cutting_force_noise_seed),
         },
         "plant_variations": plant_variations or {},
         "plant_variation_limit_percent": MAX_PLANT_VARIATION_PERCENT,
+        "cutting_force": {
+            "harmonics": [
+                {"order": int(order), "amplitude_ratio": float(ratio), "phase_rad": float(phase), "amplitude_n": float(amplitude_n * ratio)}
+                for order, (ratio, phase) in enumerate(zip(harmonic_amplitudes_ratio, harmonic_phase_rad), start=2)
+            ],
+            "noise": {"enabled": bool(cutting_force_noise_std_n > 0.0), "std_n": float(cutting_force_noise_std_n), "seed": int(cutting_force_noise_seed)},
+        },
         "process_noise": {
             "enabled": bool(process_noise_std_n > 0.0),
             "std_n": float(process_noise_std_n),
@@ -243,6 +284,10 @@ def compare_controllers(
     plant_variations=None,
     process_noise_std_n=0.0,
     process_noise_seed=42,
+    harmonic_amplitudes_ratio=None,
+    harmonic_phase_rad=None,
+    cutting_force_noise_std_n=0.0,
+    cutting_force_noise_seed=42,
 ):
     """Compare all three controllers on exactly the same plant/noise."""
 
@@ -259,6 +304,10 @@ def compare_controllers(
             plant_variations,
             process_noise_std_n,
             process_noise_seed,
+            harmonic_amplitudes_ratio,
+            harmonic_phase_rad,
+            cutting_force_noise_std_n,
+            cutting_force_noise_seed,
         )
 
         results.append(
