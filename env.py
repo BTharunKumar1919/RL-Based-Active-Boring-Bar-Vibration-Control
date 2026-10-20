@@ -56,6 +56,9 @@ class VibrationEnv(gym.Env):
         training_config: TrainingConfig = TRAINING,
         episode_duration_s=None,
         randomize_episode=True,
+        phase_range_rad=(-np.pi, np.pi),
+        process_noise_std_n=0.0,
+        process_noise_seed=42,
     ):
         super().__init__()
 
@@ -140,12 +143,21 @@ class VibrationEnv(gym.Env):
             randomize_episode
         )
 
+        self.phase_range_rad = (float(phase_range_rad[0]), float(phase_range_rad[1]))
+        if self.phase_range_rad[1] < self.phase_range_rad[0]:
+            raise ValueError("phase_range_rad must be [min, max].")
+
+        self.process_noise_std_n = float(process_noise_std_n)
+        self.process_noise_seed = int(process_noise_seed)
+
         # ---------------------------------------------------------
         # Plant
         # ---------------------------------------------------------
 
         self.plant = SevenModePlant(
-            plant_config
+            plant_config,
+            process_noise_std_n=self.process_noise_std_n,
+            process_noise_seed=self.process_noise_seed,
         )
 
         self.force_model = SinusoidalCuttingForce(

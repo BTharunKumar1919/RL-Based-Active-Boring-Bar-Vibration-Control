@@ -4,6 +4,7 @@ The dashboard communicates with api.py. It does not control physical machinery.
 """
 
 import requests
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -56,11 +57,11 @@ def api_get(path):
     return response.json()
 
 
-def api_post(path, payload):
+def api_post(path, payload, timeout=60):
     response = requests.post(
         f"{API_BASE}{path}",
         json=payload,
-        timeout=60,
+        timeout=timeout,
     )
     response.raise_for_status()
     return response.json()
@@ -736,6 +737,126 @@ except requests.RequestException as exc:
 
 
 # ---------------------------------------------------------------------
+# SAC model selection
+# ---------------------------------------------------------------------
+
+st.sidebar.divider()
+st.sidebar.subheader("SAC model")
+
+try:
+    model_catalog = api_get("/models").get("models", [])
+except requests.RequestException:
+    model_catalog = []
+
+# Keep exactly one source of truth for the model used by simulations.
+current_default_model = model_status.get(
+    "model_path",
+    "results/sac_vibration_model_7mode.zip",
+)
+
+if "selected_sac_model_path" not in st.session_state:
+    st.session_state["selected_sac_model_path"] = current_default_model
+
+# Re-read the catalogue on every rerun, so newly created models are picked up.
+model_paths = [item["path"] for item in model_catalog]
+model_by_path = {item["path"]: item for item in model_catalog}
+
+# If the currently selected model is in results, show only its filename in the
+# dropdown. The full path remains available in the selected-model display below.
+if model_paths:
+    selected_path = st.session_state["selected_sac_model_path"]
+    if selected_path not in model_paths:
+        # Prefer the default model if it exists; otherwise use the newest result.
+        selected_path = (
+            current_default_model
+            if current_default_model in model_paths
+            else model_paths[0]
+        )
+        st.session_state["selected_sac_model_path"] = selected_path
+
+    def model_label(path):
+        return Path(path).name
+
+    selected_catalog_model = st.sidebar.selectbox(
+        "Model from results/",
+        options=model_paths,
+        format_func=model_label,
+        index=model_paths.index(st.session_state["selected_sac_model_path"]),
+        key="catalog_sac_model",
+        help=(
+            "Only SAC .zip models in the API results directory are shown. "
+            "Hover over the selected-model path below to see the complete path."
+        ),
+    )
+
+    if st.sidebar.button("Use selected results model", use_container_width=True):
+        st.session_state["selected_sac_model_path"] = selected_catalog_model
+        st.rerun()
+else:
+    st.sidebar.info("No SAC .zip models found in the results directory.")
+
+if st.sidebar.button("Refresh model list", use_container_width=True):
+    st.rerun()
+
+with st.sidebar.expander("Use a model from another directory", expanded=False):
+    st.caption(
+        "Choose a SAC .zip file from your computer. It will be imported into "
+        "results/external_models and then become the active model."
+    )
+    external_model = st.file_uploader(
+        "Choose SAC model file",
+        type=["zip"],
+        key="external_sac_model_uploader",
+    )
+
+    if st.button("Use chosen external model", use_container_width=True):
+        if external_model is None:
+            st.warning("Choose a .zip SAC model first.")
+        else:
+            try:
+                files = {
+                    "file": (
+                        external_model.name,
+                        external_model.getvalue(),
+                        "application/zip",
+                    )
+                }
+                response = requests.post(
+                    f"{API_BASE}/models/import",
+                    files=files,
+                    timeout=30,
+                )
+                response.raise_for_status()
+                imported = response.json()
+                st.session_state["selected_sac_model_path"] = imported["model_path"]
+                st.success(f"Imported: {imported['model_name']}")
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Could not import model: {exc}")
+
+# Single, authoritative model path used by every SAC simulation/evaluation.
+active_model_path = st.session_state["selected_sac_model_path"]
+active_model_name = Path(active_model_path).name
+active_exists = Path(active_model_path).is_file()
+
+# Streamlit's markdown supports a native browser tooltip through the HTML title
+# attribute. This keeps the sidebar compact while exposing the exact path on hover.
+st.sidebar.markdown(
+    f'<div title="{active_model_path}"><b>Active SAC model:</b> '
+    f'{active_model_name}</div>',
+    unsafe_allow_html=True,
+)
+st.sidebar.caption(
+    "Status: " + ("file found" if active_exists else "file not found")
+)
+st.sidebar.markdown(
+    f'<div title="{active_model_path}" style="font-size:0.78rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">'
+    f'{active_model_path}</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ---------------------------------------------------------------------
 # Run simulations
 # ---------------------------------------------------------------------
 
@@ -756,6 +877,7 @@ run_clicked = st.button(
 
 if run_clicked:
     payload = {
+        "model_path": st.session_state["selected_sac_model_path"],
         "amplitude_n": amplitude_n,
         "frequency_hz": frequency_hz,
         "phase_rad": phase_rad,
@@ -843,6 +965,160 @@ if run_clicked:
         st.error(
             f"Unexpected API response: {exc}"
         )
+
+
+
+# ---------------------------------------------------------------------
+# SAC training
+# ---------------------------------------------------------------------
+
+st.divider()
+st.subheader("Train SAC")
+st.write(
+    "Train and save a new SAC policy using the same 8-state observation "
+    "history and 5-plant-step action repeat used by the evaluation pipeline."
+)
+
+with st.expander("SAC training configuration", expanded=True):
+    st.caption(
+        "Training uses randomized amplitude, frequency, and phase within the "
+        "ranges below. Plant perturbations use the current sidebar plant settings."
+    )
+
+    t1, t2, t3 = st.columns(3)
+    with t1:
+        train_total_timesteps = st.number_input("Total timesteps", min_value=1_000, max_value=20_000_000, value=300_000, step=10_000)
+        train_seed = st.number_input("Seed", min_value=0, max_value=2_147_483_647, value=42, step=1)
+        train_episode_duration = st.number_input("Episode duration (s)", min_value=0.01, max_value=2.0, value=0.2, step=0.01, format="%.3f")
+    with t2:
+        train_amp_min = st.number_input("Amplitude min (N)", min_value=0.0, max_value=10.0, value=0.5, step=0.1)
+        train_amp_max = st.number_input("Amplitude max (N)", min_value=0.0, max_value=10.0, value=1.5, step=0.1)
+        train_freq_min = st.number_input("Frequency min (Hz)", min_value=0.0, max_value=1000.0, value=150.0, step=5.0)
+        train_freq_max = st.number_input("Frequency max (Hz)", min_value=0.0, max_value=1000.0, value=200.0, step=5.0)
+    with t3:
+        train_phase_min = st.number_input("Phase min (rad)", min_value=-100.0, max_value=100.0, value=-np.pi, step=0.1, format="%.3f")
+        train_phase_max = st.number_input("Phase max (rad)", min_value=-100.0, max_value=100.0, value=np.pi, step=0.1, format="%.3f")
+        train_process_noise = st.number_input("Process noise RMS (N)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
+        train_process_seed = st.number_input("Process-noise seed", min_value=0, max_value=2_147_483_647, value=42, step=1)
+
+    st.markdown("**Cutting-force harmonics and noise**")
+    hcols = st.columns(5)
+    train_harmonic_ratios = []
+    train_harmonic_phases = []
+    for i, col in enumerate(hcols, start=2):
+        with col:
+            enabled = st.checkbox(f"{i}f", value=False, key=f"train_h{i}_enabled")
+            ratio = st.number_input(f"{i}f amplitude (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key=f"train_h{i}_ratio")
+            phase = st.number_input(f"{i}f phase (rad)", min_value=-100.0, max_value=100.0, value=0.0, step=0.1, key=f"train_h{i}_phase")
+            if enabled:
+                train_harmonic_ratios.append(float(ratio) / 100.0)
+                train_harmonic_phases.append(float(phase))
+
+    tn1, tn2 = st.columns(2)
+    with tn1:
+        train_cutting_noise = st.number_input("Cutting-force noise RMS (N)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
+    with tn2:
+        train_cutting_seed = st.number_input("Cutting-force noise seed", min_value=0, max_value=2_147_483_647, value=42, step=1)
+
+    st.markdown("**SAC hyperparameters**")
+    h1, h2, h3, h4 = st.columns(4)
+    with h1:
+        train_lr = st.number_input("Learning rate", min_value=1e-8, max_value=1.0, value=3e-4, format="%.2e")
+        train_buffer = st.number_input("Buffer size", min_value=1_000, max_value=5_000_000, value=200_000, step=10_000)
+        train_learning_starts = st.number_input("Learning starts", min_value=0, max_value=5_000_000, value=5_000, step=500)
+    with h2:
+        train_batch = st.number_input("Batch size", min_value=1, max_value=8192, value=256, step=32)
+        train_tau = st.number_input("Tau", min_value=1e-6, max_value=1.0, value=0.005, format="%.3f")
+        train_gamma = st.number_input("Gamma", min_value=1e-6, max_value=1.0, value=0.99, format="%.3f")
+    with h3:
+        train_freq = st.number_input("Train frequency", min_value=1, max_value=1000, value=1, step=1)
+        train_gradient_steps = st.number_input("Gradient steps", min_value=1, max_value=1000, value=1, step=1)
+    with h4:
+        train_action_repeat = st.number_input("Action repeat", min_value=1, max_value=100, value=5, step=1)
+        train_history = st.number_input("Observation history", min_value=1, max_value=64, value=8, step=1)
+
+    train_plant_label = "nominal" if plant_is_nominal(plant_variations) else "perturbed"
+    generated_name = (
+        f"SAC_plant_{train_plant_label}_"
+        f"A{train_amp_min:g}-{train_amp_max:g}_"
+        f"F{train_freq_min:g}-{train_freq_max:g}_"
+        f"P{train_phase_min:g}-{train_phase_max:g}_"
+        f"H{len(train_harmonic_ratios)}_"
+        f"CN{train_cutting_noise:g}_PN{train_process_noise:g}_"
+        f"T{int(train_total_timesteps)//1000}k_seed{int(train_seed)}"
+    )
+
+    if "training_model_name" not in st.session_state:
+        st.session_state["training_model_name"] = generated_name
+
+    n1, n2 = st.columns([5, 1])
+    with n1:
+        training_model_name = st.text_input(
+            "Model filename (editable)",
+            key="training_model_name",
+            help="The generated descriptive name is only a default. You can replace it before training/saving.",
+        )
+    with n2:
+        st.write("")
+        st.write("")
+        if st.button("Reset name", use_container_width=True):
+            st.session_state["training_model_name"] = generated_name
+            st.rerun()
+
+    st.caption(f"Generated default: `{generated_name}.zip`")
+
+    if not plant_is_nominal(plant_variations):
+        st.warning("The current perturbed plant settings will be used for training. This makes the resulting policy specific to that plant model.")
+
+    train_clicked = st.button("Train & save SAC model", type="primary", use_container_width=True)
+
+    if train_clicked:
+        if train_amp_max < train_amp_min:
+            st.error("Amplitude max must be >= amplitude min.")
+        elif train_freq_max < train_freq_min:
+            st.error("Frequency max must be >= frequency min.")
+        elif train_phase_max < train_phase_min:
+            st.error("Phase max must be >= phase min.")
+        elif not training_model_name.strip():
+            st.error("Model filename cannot be empty.")
+        else:
+            training_payload = {
+                "model_name": training_model_name.strip(),
+                "total_timesteps": int(train_total_timesteps),
+                "seed": int(train_seed),
+                "episode_duration_s": float(train_episode_duration),
+                "amplitude_range_n": [float(train_amp_min), float(train_amp_max)],
+                "frequency_range_hz": [float(train_freq_min), float(train_freq_max)],
+                "phase_range_rad": [float(train_phase_min), float(train_phase_max)],
+                "harmonic_amplitudes_ratio": train_harmonic_ratios,
+                "harmonic_phase_rad": train_harmonic_phases,
+                "cutting_force_noise_std_n": float(train_cutting_noise),
+                "cutting_force_noise_seed": int(train_cutting_seed),
+                "process_noise_std_n": float(train_process_noise),
+                "process_noise_seed": int(train_process_seed),
+                "plant_variations": plant_variations,
+                "sac_action_repeat": int(train_action_repeat),
+                "observation_history_length": int(train_history),
+                "learning_rate": float(train_lr),
+                "buffer_size": int(train_buffer),
+                "learning_starts": int(train_learning_starts),
+                "batch_size": int(train_batch),
+                "tau": float(train_tau),
+                "gamma": float(train_gamma),
+                "train_freq": int(train_freq),
+                "gradient_steps": int(train_gradient_steps),
+            }
+            try:
+                with st.spinner("Training SAC. This can take a while for large timestep counts..."):
+                    train_result = api_post("/train", training_payload, timeout=3600)
+                st.success(f"Training complete. Saved model: `{train_result['model_path']}`")
+                st.json(train_result.get("metadata", {}))
+                st.info("Refresh the dashboard or the model list to make the new model available for selection.")
+            except requests.HTTPError as exc:
+                detail = exc.response.text if exc.response is not None else str(exc)
+                st.error(f"SAC training failed: {detail}")
+            except requests.RequestException as exc:
+                st.error(f"SAC training request failed: {exc}")
 
 
 if "traces" not in st.session_state:
@@ -1286,6 +1562,7 @@ robust_run = st.button(
 
 if robust_run:
     robust_payload = {
+        "model_path": st.session_state["selected_sac_model_path"],
         "amplitudes_n": [float(x) for x in amplitudes_preview],
         "frequencies_hz": [float(x) for x in frequencies_preview],
         "phases_rad": [float(x) for x in phases_preview],
