@@ -39,7 +39,7 @@ def _make_sac_observation(
     state = plant.state
 
     current_limit = (
-        PLANT.continuous_current_limit_a
+        plant.config.continuous_current_limit_a
     )
 
     current_observation = np.asarray(
@@ -81,6 +81,9 @@ def simulate_controller(
     disturbance_config,
     duration_s,
     model=None,
+    plant_config=PLANT,
+    process_noise_std_n=0.0,
+    process_noise_seed=None,
 ):
     """Simulate one controller under one disturbance condition."""
 
@@ -89,7 +92,11 @@ def simulate_controller(
             "duration_s must be positive."
         )
 
-    plant = SevenModePlant(PLANT)
+    plant = SevenModePlant(
+        plant_config,
+        process_noise_std_n=process_noise_std_n,
+        process_noise_seed=process_noise_seed,
+    )
     plant.reset()
 
     force_model = SinusoidalCuttingForce(
@@ -103,7 +110,7 @@ def simulate_controller(
     elif controller_name == "PID":
 
         controller = PIDController(
-            plant_config=PLANT
+            plant_config=plant_config
         )
 
     elif controller_name == "SAC":
@@ -124,7 +131,7 @@ def simulate_controller(
     if controller is not None:
         controller.reset()
 
-    dt = PLANT.dt_s
+    dt = plant_config.dt_s
 
     action_repeat = (
         TRAINING.sac_action_repeat
@@ -157,7 +164,7 @@ def simulate_controller(
                 / TRAINING.velocity_scale_m_s,
 
                 plant.actual_current_a
-                / PLANT.continuous_current_limit_a,
+                / plant_config.continuous_current_limit_a,
             ],
             dtype=np.float32,
         )
@@ -220,7 +227,7 @@ def simulate_controller(
 
                 sac_commanded_current_a = (
                     normalized_action
-                    * PLANT.continuous_current_limit_a
+                    * plant_config.continuous_current_limit_a
                 )
 
             commanded_current_a = (
@@ -229,7 +236,7 @@ def simulate_controller(
 
             normalized_action = (
                 commanded_current_a
-                / PLANT.continuous_current_limit_a
+                / plant_config.continuous_current_limit_a
             )
 
         # =====================================================
@@ -249,14 +256,14 @@ def simulate_controller(
             commanded_current_a = float(
                 np.clip(
                     commanded_current_a,
-                    -PLANT.continuous_current_limit_a,
-                    PLANT.continuous_current_limit_a,
+                    -plant_config.continuous_current_limit_a,
+                    plant_config.continuous_current_limit_a,
                 )
             )
 
             normalized_action = (
                 commanded_current_a
-                / PLANT.continuous_current_limit_a
+                / plant_config.continuous_current_limit_a
             )
 
         # =====================================================
@@ -283,6 +290,12 @@ def simulate_controller(
 
                 "disturbance_force_n":
                     disturbance_n,
+
+                "process_noise_n":
+                    plant.last_process_noise_n,
+
+                "effective_disturbance_force_n":
+                    disturbance_n + plant.last_process_noise_n,
 
                 "commanded_current_a":
                     commanded_current_a,

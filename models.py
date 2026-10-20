@@ -7,11 +7,16 @@ The plant implements:
 The current-driven modal dynamics are preceded by a first-order actuator
 model with a finite bandwidth and current slew-rate limit.
 
-Integration uses RK4 with the actual actuator current and cutting force
-held constant over one simulation step.
+This module also provides a safe way to create perturbed plant models from
+the nominal PLANT configuration. The perturbations are expressed as
+percentage changes from the nominal physical parameters.
+
+Process noise is represented as zero-mean additive force noise on the
+force-driven mode. It is intended as a simple model of unmodelled/process
+excitation, not sensor noise.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 import numpy as np
 
@@ -22,6 +27,129 @@ from config import PLANT, DISTURBANCE, PlantConfig, DisturbanceConfig
 class PlantState:
     displacement_m: float
     velocity_m_s: float
+
+
+def _scaled(value, percent):
+    """Apply a percentage change while preserving the sign of value."""
+    return float(value) * (1.0 + float(percent) / 100.0)
+
+
+def build_plant_config(variations=None, max_percent=20.0):
+    """Create a perturbed PlantConfig from the nominal PLANT.
+
+    Expected structure::
+
+        {
+            "current_modes": [
+                {"natural_frequency_percent": 0.0,
+                 "damping_ratio_percent": 0.0,
+                 "k_yI_percent": 0.0},
+                ... six entries ...
+            ],
+            "force_mode": {
+                "natural_frequency_percent": 0.0,
+                "damping_ratio_percent": 0.0,
+                "stiffness_percent": 0.0,
+            },
+            "actuator": {
+                "bandwidth_percent": 0.0,
+                "slew_rate_percent": 0.0,
+            },
+        }
+
+    Only physical parameters that do not change the controller's action
+    interface or simulation timestep are exposed here. In particular,
+    dt and the +/-5 A current interface remain fixed so that a saved SAC
+    policy remains compatible with the observation/action space.
+    """
+
+    if variations is None:
+        return PLANT
+
+    if not isinstance(variations, dict):
+        raise ValueError("plant_variations must be a dictionary.")
+
+    max_percent = float(max_percent)
+
+    def get_percent(mapping, key):
+        value = mapping.get(key, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Plant variation '{key}' must be numeric.")
+        value = float(value)
+        if not np.isfinite(value):
+            raise ValueError(f"Plant variation '{key}' must be finite.")
+        if abs(value) > max_percent:
+            raise ValueError(
+                f"Plant variation '{key}' must be within +/-{max_percent:.1f}%."
+            )
+        return value
+
+    mode_variations = variations.get("current_modes", [])
+    if not isinstance(mode_variations, list):
+        raise ValueError("plant_variations.current_modes must be a list.")
+    if len(mode_variations) > len(PLANT.current_modes):
+        raise ValueError("Too many current-mode variation entries.")
+
+    new_modes = []
+
+    for index, mode in enumerate(PLANT.current_modes):
+        variation = mode_variations[index] if index < len(mode_variations) else {}
+        if not isinstance(variation, dict):
+            raise ValueError(f"Variation for current mode {index + 1} must be a dictionary.")
+
+        new_modes.append(
+            type(mode)(
+                natural_frequency_hz=_scaled(
+                    mode.natural_frequency_hz,
+                    get_percent(variation, "natural_frequency_percent"),
+                ),
+                damping_ratio=_scaled(
+                    mode.damping_ratio,
+                    get_percent(variation, "damping_ratio_percent"),
+                ),
+                k_yI=_scaled(
+                    mode.k_yI,
+                    get_percent(variation, "k_yI_percent"),
+                ),
+            )
+        )
+
+    force_variation = variations.get("force_mode", {})
+    if not isinstance(force_variation, dict):
+        raise ValueError("plant_variations.force_mode must be a dictionary.")
+
+    force_mode = type(PLANT.force_mode)(
+        natural_frequency_hz=_scaled(
+            PLANT.force_mode.natural_frequency_hz,
+            get_percent(force_variation, "natural_frequency_percent"),
+        ),
+        damping_ratio=_scaled(
+            PLANT.force_mode.damping_ratio,
+            get_percent(force_variation, "damping_ratio_percent"),
+        ),
+        stiffness_n_m=_scaled(
+            PLANT.force_mode.stiffness_n_m,
+            get_percent(force_variation, "stiffness_percent"),
+        ),
+    )
+
+    actuator_variation = variations.get("actuator", {})
+    if not isinstance(actuator_variation, dict):
+        raise ValueError("plant_variations.actuator must be a dictionary.")
+
+    return replace(
+        PLANT,
+        current_modes=tuple(new_modes),
+        force_mode=force_mode,
+        actuator_bandwidth_hz=_scaled(
+            PLANT.actuator_bandwidth_hz,
+            get_percent(actuator_variation, "bandwidth_percent"),
+        ),
+        current_slew_rate_a_s=_scaled(
+            PLANT.current_slew_rate_a_s,
+            get_percent(actuator_variation, "slew_rate_percent"),
+        ),
+    )
 
 
 class SinusoidalCuttingForce:
@@ -70,9 +198,17 @@ class SevenModePlant:
                  |
                  v
         current-driven modal dynamics
+
+    ``process_noise_std_n`` adds zero-mean Gaussian force noise to the
+    force-driven mode at each physical integration step.
     """
 
-    def __init__(self, config: PlantConfig = PLANT):
+    def __init__(
+        self,
+        config: PlantConfig = PLANT,
+        process_noise_std_n: float = 0.0,
+        process_noise_seed=None,
+    ):
         if config.dt_s <= 0:
             raise ValueError(
                 "Simulation time step must be positive."
@@ -98,6 +234,12 @@ class SevenModePlant:
                 "Current slew rate must be positive."
             )
 
+        process_noise_std_n = float(process_noise_std_n)
+        if not np.isfinite(process_noise_std_n) or process_noise_std_n < 0:
+            raise ValueError(
+                "process_noise_std_n must be a finite non-negative value."
+            )
+
         for mode in (*config.current_modes, config.force_mode):
             if mode.natural_frequency_hz <= 0:
                 raise ValueError(
@@ -120,6 +262,9 @@ class SevenModePlant:
             )
 
         self.config = config
+        self.process_noise_std_n = process_noise_std_n
+        self.rng = np.random.default_rng(process_noise_seed)
+        self.last_process_noise_n = 0.0
 
         self.current_q = np.zeros(
             len(config.current_modes),
@@ -169,8 +314,8 @@ class SevenModePlant:
         self.force_q = float(displacement_m)
         self.force_v = float(velocity_m_s)
 
-        # The actuator starts at zero current.
         self.actuator_current_a = 0.0
+        self.last_process_noise_n = 0.0
 
         return self.state
 
@@ -260,17 +405,9 @@ class SevenModePlant:
         self,
         commanded_current_a,
     ):
-        """Update the actual actuator current.
-
-        The actuator is modeled as a first-order system:
-
-            tau dI/dt + I = I_command
-
-        followed by a physical current slew-rate limit and hard saturation.
-        """
+        """Update the actual actuator current."""
 
         dt = self.config.dt_s
-
         limit = self.config.continuous_current_limit_a
 
         commanded_current_a = float(
@@ -281,15 +418,12 @@ class SevenModePlant:
             )
         )
 
-        # First-order actuator time constant corresponding to the
-        # specified -3 dB bandwidth.
         bandwidth_hz = self.config.actuator_bandwidth_hz
 
         tau = 1.0 / (
             2.0 * math.pi * bandwidth_hz
         )
 
-        # Exact-discrete-equivalent style update.
         alpha = dt / (tau + dt)
 
         filtered_current = (
@@ -301,7 +435,6 @@ class SevenModePlant:
             )
         )
 
-        # Apply physical slew-rate limitation.
         max_delta = (
             self.config.current_slew_rate_a_s
             * dt
@@ -315,7 +448,6 @@ class SevenModePlant:
 
         self.actuator_current_a += delta
 
-        # Final hard continuous-current limit.
         self.actuator_current_a = float(
             np.clip(
                 self.actuator_current_a,
@@ -331,30 +463,29 @@ class SevenModePlant:
         disturbance_n: float,
         current_a: float,
     ) -> PlantState:
-        """Advance the seven modal states by one RK4 step.
+        """Advance the seven modal states by one RK4 step."""
 
-        Parameters
-        ----------
-        disturbance_n:
-            Cutting-force disturbance in N.
-
-        current_a:
-            Commanded actuator current in A.
-
-        Returns
-        -------
-        PlantState
-            Updated tool-tip displacement and velocity.
-        """
-
-        # Convert commanded current to actual physical actuator current.
         actual_current_a = self._update_actuator_current(
             current_a
         )
 
         disturbance_n = float(disturbance_n)
 
-        # Current-driven modes.
+        process_noise_n = 0.0
+        if self.process_noise_std_n > 0.0:
+            process_noise_n = float(
+                self.rng.normal(
+                    0.0,
+                    self.process_noise_std_n,
+                )
+            )
+
+        self.last_process_noise_n = process_noise_n
+
+        effective_disturbance_n = (
+            disturbance_n + process_noise_n
+        )
+
         for idx, mode in enumerate(
             self.config.current_modes
         ):
@@ -364,10 +495,6 @@ class SevenModePlant:
                 * mode.natural_frequency_hz
             )
 
-            # Numerator from G_qi(s)/k_yI,i:
-            #
-            #     omega_i^2 / k_yI,i
-            #
             gain = omega**2 / mode.k_yI
 
             self.current_q[idx], self.current_v[idx] = (
@@ -381,7 +508,6 @@ class SevenModePlant:
                 )
             )
 
-        # Cutting-force-driven mode.
         mode = self.config.force_mode
 
         omega = (
@@ -390,10 +516,6 @@ class SevenModePlant:
             * mode.natural_frequency_hz
         )
 
-        # Numerator from G_yF(s):
-        #
-        #     omega_o^2 / k_yF,o
-        #
         gain = omega**2 / mode.stiffness_n_m
 
         self.force_q, self.force_v = self._rk4_mode(
@@ -402,7 +524,7 @@ class SevenModePlant:
             omega,
             mode.damping_ratio,
             gain,
-            disturbance_n,
+            effective_disturbance_n,
         )
 
         return self.state

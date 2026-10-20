@@ -1,18 +1,20 @@
-
 """FastAPI endpoints for the simulated boring-bar vibration-control demo."""
-import math
+
 import os
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from deployment_service import (
     DEFAULT_MODEL_PATH,
+    MAX_PLANT_VARIATION_PERCENT,
+    MAX_PROCESS_NOISE_STD_N,
     compare_controllers,
     get_model_status,
     run_simulation,
 )
+
 
 app = FastAPI(
     title="Boring-Bar Vibration Control API",
@@ -23,22 +25,102 @@ app = FastAPI(
     version="1.0.0",
 )
 
-MODEL_PATH = os.getenv("SAC_MODEL_PATH", DEFAULT_MODEL_PATH)
+MODEL_PATH = os.getenv(
+    "SAC_MODEL_PATH",
+    DEFAULT_MODEL_PATH,
+)
 
 
 class SimulationRequest(BaseModel):
-    controller: Literal["No control", "PID", "SAC"] = "SAC"
-    amplitude_n: float = Field(default=1.0, ge=0.0, le=10.0)
-    frequency_hz: float = Field(default=174.0, ge=0.0, le=1000.0)
-    phase_rad: float = Field(default=0.0, ge=-100.0, le=100.0)
-    duration_s: float = Field(default=0.2, gt=0.0, le=2.0)
+    controller: Literal[
+        "No control",
+        "PID",
+        "SAC",
+    ] = "SAC"
+
+    amplitude_n: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=10.0,
+    )
+
+    frequency_hz: float = Field(
+        default=174.0,
+        ge=0.0,
+        le=1000.0,
+    )
+
+    phase_rad: float = Field(
+        default=0.0,
+        ge=-100.0,
+        le=100.0,
+    )
+
+    duration_s: float = Field(
+        default=0.2,
+        gt=0.0,
+        le=2.0,
+    )
+
+    plant_variations: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            f"Physical plant parameter changes in percent. "
+            f"Allowed magnitude: +/-{MAX_PLANT_VARIATION_PERCENT:.0f}%."
+        ),
+    )
+
+    process_noise_std_n: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=MAX_PROCESS_NOISE_STD_N,
+    )
+
+    process_noise_seed: int = Field(
+        default=42,
+        ge=0,
+    )
 
 
 class ComparisonRequest(BaseModel):
-    amplitude_n: float = Field(default=1.0, ge=0.0, le=10.0)
-    frequency_hz: float = Field(default=174.0, ge=0.0, le=1000.0)
-    phase_rad: float = Field(default=0.0, ge=-100.0, le=100.0)
-    duration_s: float = Field(default=0.2, gt=0.0, le=2.0)
+    amplitude_n: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=10.0,
+    )
+
+    frequency_hz: float = Field(
+        default=174.0,
+        ge=0.0,
+        le=1000.0,
+    )
+
+    phase_rad: float = Field(
+        default=0.0,
+        ge=-100.0,
+        le=100.0,
+    )
+
+    duration_s: float = Field(
+        default=0.2,
+        gt=0.0,
+        le=2.0,
+    )
+
+    plant_variations: dict[str, Any] = Field(
+        default_factory=dict,
+    )
+
+    process_noise_std_n: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=MAX_PROCESS_NOISE_STD_N,
+    )
+
+    process_noise_seed: int = Field(
+        default=42,
+        ge=0,
+    )
 
 
 @app.get("/")
@@ -53,17 +135,28 @@ def root():
 
 @app.get("/health")
 def health():
-    status = get_model_status(MODEL_PATH)
+    status = get_model_status(
+        MODEL_PATH
+    )
+
     return {
         "status": "ok",
         "simulation_only": True,
         "sac_model": status,
+        "plant_parameter_variation_limit_percent": (
+            MAX_PLANT_VARIATION_PERCENT
+        ),
+        "process_noise_max_std_n": (
+            MAX_PROCESS_NOISE_STD_N
+        ),
     }
 
 
 @app.get("/model")
 def model_status():
-    return get_model_status(MODEL_PATH)
+    return get_model_status(
+        MODEL_PATH
+    )
 
 
 @app.post("/simulate")
@@ -76,16 +169,29 @@ def simulate(request: SimulationRequest):
             phase_rad=request.phase_rad,
             duration_s=request.duration_s,
             model_path=MODEL_PATH,
+            plant_variations=request.plant_variations,
+            process_noise_std_n=request.process_noise_std_n,
+            process_noise_seed=request.process_noise_seed,
         )
+
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
+
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
-        # Avoid returning internal exception details to API clients.
         raise HTTPException(
             status_code=500,
-            detail="Simulation failed. Check the server terminal logs.",
+            detail=(
+                "Simulation failed. Check the server terminal logs."
+            ),
         ) from exc
 
 
@@ -100,14 +206,28 @@ def compare(request: ComparisonRequest):
                 phase_rad=request.phase_rad,
                 duration_s=request.duration_s,
                 model_path=MODEL_PATH,
+                plant_variations=request.plant_variations,
+                process_noise_std_n=request.process_noise_std_n,
+                process_noise_seed=request.process_noise_seed,
             ),
         }
+
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
+
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail="Controller comparison failed. Check server logs.",
+            detail=(
+                "Controller comparison failed. Check server logs."
+            ),
         ) from exc

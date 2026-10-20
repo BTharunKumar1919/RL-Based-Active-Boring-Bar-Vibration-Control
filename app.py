@@ -1,11 +1,10 @@
-
 """Streamlit dashboard for simulated active boring-bar vibration control.
 
 The dashboard communicates with api.py. It does not control physical machinery.
 """
 
-import io
 import requests
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -20,17 +19,35 @@ st.set_page_config(
     layout="wide",
 )
 
+
 API_BASE = st.sidebar.text_input(
     "API URL",
     value="http://127.0.0.1:8000",
 ).strip().rstrip("/")
 
+
 CONTROLLERS = ["No control", "PID", "SAC"]
+
 COLORS = {
     "No control": "#7f8c8d",
     "PID": "#e67e22",
     "SAC": "#2471a3",
 }
+
+
+PLANT_VARIATION_LIMIT_PERCENT = 20.0
+
+NOMINAL_CURRENT_MODES = [
+    (51.0, 0.03, -2.0e6),
+    (67.0, 0.08, -4.0e5),
+    (98.0, 0.03, -9.0e6),
+    (138.0, 0.08, -8.0e5),
+    (273.0, 0.05, 4.0e6),
+    (450.0, 0.05, -9.5e5),
+]
+
+NOMINAL_FORCE_MODE = (188.0, 0.034, 2.6e6)
+NOMINAL_ACTUATOR = (800.0, 10000.0)
 
 
 def api_get(path):
@@ -51,6 +68,7 @@ def api_post(path, payload):
 
 def metric_value(metrics, key):
     value = metrics.get(key)
+
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -63,23 +81,35 @@ def make_comparison_table(results):
     for result in results:
         rows.append({
             "Controller": result["controller"],
+
             "Steady RMS (µm)": metric_value(
-                result, "steady_rms_vibration_um"
+                result,
+                "steady_rms_vibration_um",
             ),
+
             "Overall RMS (µm)": metric_value(
-                result, "rms_vibration_um"
+                result,
+                "rms_vibration_um",
             ),
+
             "Peak vibration (µm)": metric_value(
-                result, "peak_vibration_um"
+                result,
+                "peak_vibration_um",
             ),
+
             "RMS current (A)": metric_value(
-                result, "rms_control_current_a"
+                result,
+                "rms_control_current_a",
             ),
+
             "Peak current (A)": metric_value(
-                result, "peak_control_current_a"
+                result,
+                "peak_control_current_a",
             ),
+
             "Saturation (%)": 100 * metric_value(
-                result, "actuator_saturation_fraction"
+                result,
+                "actuator_saturation_fraction",
             ),
         })
 
@@ -94,13 +124,17 @@ def make_trace_plot(traces, y_column, title, y_label):
             continue
 
         data = traces[controller]
+
         fig.add_trace(
             go.Scatter(
                 x=data["time_s"],
                 y=data[y_column],
                 name=controller,
                 mode="lines",
-                line={"color": COLORS[controller], "width": 1.8},
+                line={
+                    "color": COLORS[controller],
+                    "width": 1.8,
+                },
             )
         )
 
@@ -110,8 +144,14 @@ def make_trace_plot(traces, y_column, title, y_label):
         yaxis_title=y_label,
         hovermode="x unified",
         legend_title="Controller",
-        margin={"l": 15, "r": 15, "t": 60, "b": 15},
+        margin={
+            "l": 15,
+            "r": 15,
+            "t": 60,
+            "b": 15,
+        },
     )
+
     return fig
 
 
@@ -134,38 +174,67 @@ def make_force_disturbance_plot(traces):
         data = traces[controller]
         color = COLORS[controller]
 
+        # External cutting-force disturbance
         fig.add_trace(
             go.Scatter(
                 x=data["time_s"],
                 y=data["disturbance_force_n"],
                 name=f"{controller} disturbance",
-                line={"color": color, "width": 1.5},
+                line={
+                    "color": color,
+                    "width": 1.5,
+                },
                 legendgroup=controller,
             ),
             row=1,
             col=1,
         )
 
+        # Actual actuator current
         fig.add_trace(
             go.Scatter(
                 x=data["time_s"],
                 y=data["control_current_a"],
                 name=f"{controller} control",
-                line={"color": color, "width": 1.5},
+                line={
+                    "color": color,
+                    "width": 1.5,
+                },
                 legendgroup=controller,
             ),
             row=2,
             col=1,
         )
 
-    fig.update_xaxes(title_text="Time (s)", row=2, col=1)
-    fig.update_yaxes(title_text="Force (N)", row=1, col=1)
-    fig.update_yaxes(title_text="Current (A)", row=2, col=1)
+    fig.update_xaxes(
+        title_text="Time (s)",
+        row=2,
+        col=1,
+    )
+
+    fig.update_yaxes(
+        title_text="Force (N)",
+        row=1,
+        col=1,
+    )
+
+    fig.update_yaxes(
+        title_text="Current (A)",
+        row=2,
+        col=1,
+    )
+
     fig.update_layout(
         height=650,
         hovermode="x unified",
-        margin={"l": 15, "r": 15, "t": 70, "b": 15},
+        margin={
+            "l": 15,
+            "r": 15,
+            "t": 70,
+            "b": 15,
+        },
     )
+
     return fig
 
 
@@ -179,13 +248,143 @@ def make_bar_chart(table, column, title, y_label):
         title=title,
         text_auto=".4g",
     )
+
     fig.update_layout(
         xaxis_title="Controller",
         yaxis_title=y_label,
         showlegend=False,
-        margin={"l": 15, "r": 15, "t": 60, "b": 15},
+        margin={
+            "l": 15,
+            "r": 15,
+            "t": 60,
+            "b": 15,
+        },
     )
+
     return fig
+
+
+def build_plant_variations():
+    """Read plant-parameter percentage changes from the sidebar widgets."""
+
+    current_modes = []
+
+    with st.sidebar.expander("Current-driven modal parameters", expanded=False):
+        st.caption(
+            "Each value is a percentage change from the nominal V3 plant. "
+            f"Allowed range: +/-{PLANT_VARIATION_LIMIT_PERCENT:.0f}%."
+        )
+
+        for index, (frequency, damping, kyI) in enumerate(NOMINAL_CURRENT_MODES, start=1):
+            st.markdown(f"**Mode {index}: {frequency:.0f} Hz nominal**")
+
+            frequency_percent = st.slider(
+                f"Mode {index} natural frequency (%)",
+                -PLANT_VARIATION_LIMIT_PERCENT,
+                PLANT_VARIATION_LIMIT_PERCENT,
+                0.0,
+                1.0,
+                key=f"mode_{index}_frequency",
+            )
+
+            damping_percent = st.slider(
+                f"Mode {index} damping ratio (%)",
+                -PLANT_VARIATION_LIMIT_PERCENT,
+                PLANT_VARIATION_LIMIT_PERCENT,
+                0.0,
+                1.0,
+                key=f"mode_{index}_damping",
+            )
+
+            kyI_percent = st.slider(
+                f"Mode {index} k_yI (%)",
+                -PLANT_VARIATION_LIMIT_PERCENT,
+                PLANT_VARIATION_LIMIT_PERCENT,
+                0.0,
+                1.0,
+                key=f"mode_{index}_kyi",
+            )
+
+            current_modes.append({
+                "natural_frequency_percent": frequency_percent,
+                "damping_ratio_percent": damping_percent,
+                "k_yI_percent": kyI_percent,
+            })
+
+    with st.sidebar.expander("Force-driven mode", expanded=False):
+        force_frequency_percent = st.slider(
+            "Force-mode natural frequency (%)",
+            -PLANT_VARIATION_LIMIT_PERCENT,
+            PLANT_VARIATION_LIMIT_PERCENT,
+            0.0,
+            1.0,
+        )
+
+        force_damping_percent = st.slider(
+            "Force-mode damping ratio (%)",
+            -PLANT_VARIATION_LIMIT_PERCENT,
+            PLANT_VARIATION_LIMIT_PERCENT,
+            0.0,
+            1.0,
+        )
+
+        force_stiffness_percent = st.slider(
+            "Force-mode stiffness (%)",
+            -PLANT_VARIATION_LIMIT_PERCENT,
+            PLANT_VARIATION_LIMIT_PERCENT,
+            0.0,
+            1.0,
+        )
+
+    with st.sidebar.expander("Actuator parameters", expanded=False):
+        actuator_bandwidth_percent = st.slider(
+            "Actuator bandwidth (%)",
+            -PLANT_VARIATION_LIMIT_PERCENT,
+            PLANT_VARIATION_LIMIT_PERCENT,
+            0.0,
+            1.0,
+        )
+
+        actuator_slew_percent = st.slider(
+            "Current slew rate (%)",
+            -PLANT_VARIATION_LIMIT_PERCENT,
+            PLANT_VARIATION_LIMIT_PERCENT,
+            0.0,
+            1.0,
+        )
+
+    return {
+        "current_modes": current_modes,
+        "force_mode": {
+            "natural_frequency_percent": force_frequency_percent,
+            "damping_ratio_percent": force_damping_percent,
+            "stiffness_percent": force_stiffness_percent,
+        },
+        "actuator": {
+            "bandwidth_percent": actuator_bandwidth_percent,
+            "slew_rate_percent": actuator_slew_percent,
+        },
+    }
+
+
+def plant_is_nominal(plant_variations):
+    for mode in plant_variations["current_modes"]:
+        if any(abs(float(value)) > 1e-12 for value in mode.values()):
+            return False
+
+    if any(
+        abs(float(value)) > 1e-12
+        for value in plant_variations["force_mode"].values()
+    ):
+        return False
+
+    if any(
+        abs(float(value)) > 1e-12
+        for value in plant_variations["actuator"].values()
+    ):
+        return False
+
+    return True
 
 
 def to_csv_bytes(dataframe):
@@ -197,9 +396,11 @@ def to_csv_bytes(dataframe):
 # ---------------------------------------------------------------------
 
 st.title("Active Boring-Bar Vibration Control")
+
 st.caption(
     "Simulation dashboard | No Control vs PID vs Soft Actor-Critic (SAC)"
 )
+
 
 with st.sidebar:
     st.header("Simulation settings")
@@ -237,30 +438,81 @@ with st.sidebar:
     )
 
     st.divider()
+
+    st.subheader("Plant & actuator model")
+
+    plant_variations = build_plant_variations()
+
+    process_noise_std_n = st.slider(
+        "Process-noise force RMS (N)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.0,
+        step=0.01,
+        help=(
+            "Adds zero-mean Gaussian force noise to the force-driven plant "
+            "mode at each 0.1 ms plant step. This is process/model noise, "
+            "not sensor noise."
+        ),
+    )
+
+    process_noise_seed = st.number_input(
+        "Process-noise seed",
+        min_value=0,
+        max_value=2_147_483_647,
+        value=42,
+        step=1,
+    )
+
+    if plant_is_nominal(plant_variations):
+        st.caption("Plant model: nominal V3")
+    else:
+        st.warning(
+            "A perturbed plant is selected. The saved SAC policy was not "
+            "retrained for this plant; this is an out-of-model deployment test."
+        )
+
+    if process_noise_std_n > 0:
+        st.caption(
+            f"Process noise enabled: {process_noise_std_n:.2f} N RMS "
+            f"(seed {int(process_noise_seed)})."
+        )
+
+    st.divider()
+
     st.caption(
         "These are simulated disturbance parameters, not live machine inputs."
     )
 
+
 try:
     health = api_get("/health")
+
     st.sidebar.success("API connected")
+
     model_status = health.get("sac_model", {})
+
     if model_status.get("model_exists"):
         st.sidebar.success("SAC model file found")
     else:
         st.sidebar.warning("SAC model file not found")
-        st.sidebar.caption(model_status.get("message", ""))
+        st.sidebar.caption(
+            model_status.get("message", "")
+        )
 
 except requests.RequestException as exc:
     st.error(
         "Cannot connect to the API. Start the FastAPI server in another "
         "terminal, then rerun this dashboard."
     )
+
     st.code(
         r".venv\Scripts\python.exe -m uvicorn api:app --reload",
         language="bat",
     )
+
     st.caption(f"Connection detail: {exc}")
+
     st.stop()
 
 
@@ -275,11 +527,13 @@ st.write(
     "amplitude, frequency, phase, and duration."
 )
 
+
 run_clicked = st.button(
     "Run all three controllers",
     type="primary",
     use_container_width=True,
 )
+
 
 if run_clicked:
     payload = {
@@ -287,19 +541,49 @@ if run_clicked:
         "frequency_hz": frequency_hz,
         "phase_rad": phase_rad,
         "duration_s": duration_s,
+        "plant_variations": plant_variations,
+        "process_noise_std_n": float(process_noise_std_n),
+        "process_noise_seed": int(process_noise_seed),
     }
 
     try:
         with st.spinner("Running simulations..."):
             traces = {}
             metrics_results = []
+            run_metadata = None
 
             for controller in CONTROLLERS:
                 result = api_post(
                     "/simulate",
-                    {"controller": controller, **payload},
+                    {
+                        "controller": controller,
+                        **payload,
+                    },
                 )
-                traces[controller] = pd.DataFrame(result["timeseries"])
+
+                traces[controller] = pd.DataFrame(
+                    result["timeseries"]
+                )
+
+                if controller == "SAC":
+                    run_metadata = {
+                        "training_frequency_range_hz": result.get(
+                            "training_frequency_range_hz", [150.0, 200.0]
+                        ),
+                        "sac_action_repeat": result.get(
+                            "sac_action_repeat", 5
+                        ),
+                        "sac_action_interval_s": result.get(
+                            "sac_action_interval_s", 0.0005
+                        ),
+                        "observation_history_length": result.get(
+                            "observation_history_length", 8
+                        ),
+                        "plant_parameters": result.get(
+                            "plant_parameters", {}
+                        ),
+                    }
+
                 metrics_results.append({
                     "controller": controller,
                     **result["metrics"],
@@ -308,63 +592,156 @@ if run_clicked:
             st.session_state["traces"] = traces
             st.session_state["metrics_results"] = metrics_results
             st.session_state["simulation_inputs"] = payload
+            st.session_state["run_metadata"] = run_metadata or {}
 
     except requests.HTTPError as exc:
-        detail = exc.response.text if exc.response is not None else str(exc)
-        st.error(f"API returned an error: {detail}")
+        detail = (
+            exc.response.text
+            if exc.response is not None
+            else str(exc)
+        )
+
+        st.error(
+            f"API returned an error: {detail}"
+        )
+
     except requests.RequestException as exc:
-        st.error(f"Simulation request failed: {exc}")
+        st.error(
+            f"Simulation request failed: {exc}"
+        )
+
     except (KeyError, ValueError, TypeError) as exc:
-        st.error(f"Unexpected API response: {exc}")
+        st.error(
+            f"Unexpected API response: {exc}"
+        )
 
 
 if "traces" not in st.session_state:
-    st.info("Set the parameters in the sidebar and click Run all three controllers.")
+    st.info(
+        "Set the parameters in the sidebar and click "
+        "Run all three controllers."
+    )
+
     st.stop()
 
 
 traces = st.session_state["traces"]
 metrics_results = st.session_state["metrics_results"]
 run_inputs = st.session_state["simulation_inputs"]
+run_metadata = st.session_state.get("run_metadata", {})
+
 table = make_comparison_table(metrics_results)
+
 
 # ---------------------------------------------------------------------
 # Context and key performance indicators
 # ---------------------------------------------------------------------
 
 st.divider()
+
 st.subheader("Simulation condition")
 
+
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Disturbance amplitude", f"{run_inputs['amplitude_n']:.2f} N")
-c2.metric("Frequency", f"{run_inputs['frequency_hz']:.1f} Hz")
-c3.metric("Phase", f"{run_inputs['phase_rad']:.2f} rad")
-c4.metric("Duration", f"{run_inputs['duration_s']:.2f} s")
+
+c1.metric(
+    "Disturbance amplitude",
+    f"{run_inputs['amplitude_n']:.2f} N",
+)
+
+c2.metric(
+    "Frequency",
+    f"{run_inputs['frequency_hz']:.1f} Hz",
+)
+
+c3.metric(
+    "Phase",
+    f"{run_inputs['phase_rad']:.2f} rad",
+)
+
+c4.metric(
+    "Duration",
+    f"{run_inputs['duration_s']:.2f} s",
+)
+
+
+meta1, meta2, meta3 = st.columns(3)
+
+if run_metadata:
+    meta1.metric(
+        "SAC history",
+        f"{run_metadata.get('observation_history_length', 8)} states",
+    )
+    meta2.metric(
+        "SAC action interval",
+        f"{run_metadata.get('sac_action_interval_s', 0.0005) * 1e3:.2f} ms",
+    )
+    meta3.metric(
+        "Process noise",
+        f"{run_inputs.get('process_noise_std_n', 0.0):.2f} N RMS",
+    )
+
 
 frequency = run_inputs["frequency_hz"]
-if 150 <= frequency <= 200:
-    st.success("Frequency is within the SAC training range (150–200 Hz).")
+training_range = run_metadata.get(
+    "training_frequency_range_hz",
+    [150.0, 200.0],
+)
+
+if training_range[0] <= frequency <= training_range[1]:
+    st.success(
+        f"Frequency is within the SAC training range "
+        f"({training_range[0]:.0f}–{training_range[1]:.0f} Hz)."
+    )
 else:
     st.warning(
-        "Frequency is outside the SAC training range (150–200 Hz). "
+        f"Frequency is outside the SAC training range "
+        f"({training_range[0]:.0f}–{training_range[1]:.0f} Hz). "
         "Treat SAC performance here as an out-of-range test."
     )
 
-baseline_rows = table[table["Controller"] == "No control"]
+
+baseline_rows = table[
+    table["Controller"] == "No control"
+]
+
 if not baseline_rows.empty:
     baseline_rms = baseline_rows.iloc[0]["Steady RMS (µm)"]
-    controller_rows = table[table["Controller"] != "No control"]
+
+    controller_rows = table[
+        table["Controller"] != "No control"
+    ]
 
     if np.isfinite(baseline_rms) and baseline_rms > 0:
-        cols = st.columns(max(1, len(controller_rows)))
-        for col, (_, row) in zip(cols, controller_rows.iterrows()):
+        cols = st.columns(
+            max(1, len(controller_rows))
+        )
+
+        for col, (_, row) in zip(
+            cols,
+            controller_rows.iterrows(),
+        ):
             rms = row["Steady RMS (µm)"]
-            reduction = 100 * (1 - rms / baseline_rms) if np.isfinite(rms) else np.nan
+
+            reduction = (
+                100 * (1 - rms / baseline_rms)
+                if np.isfinite(rms)
+                else np.nan
+            )
+
             col.metric(
                 f"{row['Controller']} steady RMS reduction",
-                f"{reduction:.2f}%" if np.isfinite(reduction) else "N/A",
-                help="Positive means lower steady-state RMS than No Control; negative means worse.",
+                (
+                    f"{reduction:.2f}%"
+                    if np.isfinite(reduction)
+                    else "N/A"
+                ),
+                help=(
+                    "Positive means lower steady-state RMS than "
+                    "No Control; negative means worse."
+                ),
             )
+
 
 # ---------------------------------------------------------------------
 # Charts
@@ -372,12 +749,14 @@ if not baseline_rows.empty:
 
 tab_vibration, tab_force, tab_metrics, tab_data = st.tabs([
     "Vibration response",
-    "Force response",
+    "Force & current response",
     "Performance metrics",
     "Raw data & downloads",
 ])
 
+
 with tab_vibration:
+
     st.plotly_chart(
         make_trace_plot(
             traces,
@@ -399,33 +778,43 @@ with tab_vibration:
     )
 
     st.caption(
-        "The displacement is the simulated modal coordinate expressed in "
-        "micrometres. It is not necessarily physical tool-tip displacement "
-        "without a calibrated mode-shape scale."
+        "The displacement is the simulated modal coordinate expressed "
+        "in micrometres. It is not necessarily physical tool-tip "
+        "displacement without a calibrated mode-shape scale."
     )
 
+
 with tab_force:
+
     st.plotly_chart(
         make_force_disturbance_plot(traces),
         use_container_width=True,
     )
 
     st.caption(
-        "Control force is the simulated generalized force. It does not model "
-        "real actuator bandwidth, delay, or hardware dynamics."
+        "The upper plot shows the applied cutting-force disturbance. "
+        "The lower plot shows the actual actuator current after the "
+        "modeled actuator dynamics, including bandwidth, slew-rate "
+        "limiting, and current saturation."
     )
 
+
 with tab_metrics:
+
     st.subheader("Metric table")
+
     st.dataframe(
-        table.style.format({
-            "Steady RMS (µm)": "{:.4f}",
-            "Overall RMS (µm)": "{:.4f}",
-            "Peak vibration (µm)": "{:.4f}",
-            "RMS force (N)": "{:.4f}",
-            "Peak force (N)": "{:.4f}",
-            "Saturation (%)": "{:.2f}",
-        }, na_rep="N/A"),
+        table.style.format(
+            {
+                "Steady RMS (µm)": "{:.4f}",
+                "Overall RMS (µm)": "{:.4f}",
+                "Peak vibration (µm)": "{:.4f}",
+                "RMS current (A)": "{:.4f}",
+                "Peak current (A)": "{:.4f}",
+                "Saturation (%)": "{:.2f}",
+            },
+            na_rep="N/A",
+        ),
         use_container_width=True,
         hide_index=True,
     )
@@ -433,6 +822,7 @@ with tab_metrics:
     left, right = st.columns(2)
 
     with left:
+
         st.plotly_chart(
             make_bar_chart(
                 table,
@@ -454,12 +844,13 @@ with tab_metrics:
         )
 
     with right:
+
         st.plotly_chart(
             make_bar_chart(
                 table,
-                "RMS force (N)",
+                "RMS current (A)",
                 "RMS control effort",
-                "RMS force (N)",
+                "RMS current (A)",
             ),
             use_container_width=True,
         )
@@ -475,18 +866,21 @@ with tab_metrics:
         )
 
     st.info(
-        "Lower vibration is desirable, but compare it alongside control effort "
-        "and saturation. These metrics characterize this simulated scenario "
-        "only; one run is not a robustness study."
+        "Lower vibration is desirable, but compare it alongside "
+        "control effort and saturation. These metrics characterize "
+        "this simulated scenario only; one run is not a robustness study."
     )
 
+
 with tab_data:
+
     selected_controller = st.selectbox(
         "Select controller trace",
         CONTROLLERS,
     )
 
     selected_data = traces[selected_controller]
+
     st.dataframe(
         selected_data,
         use_container_width=True,
@@ -496,7 +890,9 @@ with tab_data:
     st.download_button(
         "Download selected time series (CSV)",
         data=to_csv_bytes(selected_data),
-        file_name=f"{selected_controller.lower().replace(' ', '_')}_trace.csv",
+        file_name=(
+            f"{selected_controller.lower().replace(' ', '_')}_trace.csv"
+        ),
         mime="text/csv",
     )
 
@@ -508,12 +904,21 @@ with tab_data:
     )
 
     combined = []
+
     for controller, data in traces.items():
         copy = data.copy()
-        copy.insert(0, "controller", controller)
+        copy.insert(
+            0,
+            "controller",
+            controller,
+        )
         combined.append(copy)
 
-    all_traces = pd.concat(combined, ignore_index=True)
+    all_traces = pd.concat(
+        combined,
+        ignore_index=True,
+    )
+
     st.download_button(
         "Download all time series (CSV)",
         data=to_csv_bytes(all_traces),
@@ -521,26 +926,33 @@ with tab_data:
         mime="text/csv",
     )
 
+
 # ---------------------------------------------------------------------
 # Model scope and limitations
 # ---------------------------------------------------------------------
 
 with st.expander("Model assumptions and limitations"):
+
     st.markdown(
         """
-        - This is a **seven-mode current-driven modal model** with a harmonic cutting-force disturbance.
-        - The SAC policy is loaded from a previously trained model; this
-          dashboard does not train it.
+        - This is a **seven-mode current-driven modal model** with a
+          harmonic cutting-force disturbance.
+        - The SAC policy is loaded from a previously trained model;
+          this dashboard does not train it.
         - PID uses fixed gains; SAC uses a learned policy.
-        - Sensor noise, Kalman filtering, amplifier dynamics, and randomized
-          plant parameters are not included in this phase. The SAC action is
-          mapped to the 5 A continuous current limit.
+        - Sensor noise, Kalman filtering, amplifier dynamics, and
+          randomized plant parameters are not included in this phase.
+        - The SAC action is mapped to the 5 A continuous current limit
+          before passing through the modeled actuator dynamics.
+        - The actuator model includes bandwidth, current slew-rate
+          limiting, and current saturation.
         - Results do not establish performance on regenerative chatter,
           a physical boring bar, or real actuator hardware.
-        - A single manually selected condition is not sufficient to claim
-          robustness or general superiority.
+        - A single manually selected condition is not sufficient to
+          claim robustness or general superiority.
         """
     )
+
 
 st.caption(
     "Educational simulation only — not connected to physical machinery."
