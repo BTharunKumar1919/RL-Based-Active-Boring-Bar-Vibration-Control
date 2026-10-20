@@ -215,7 +215,7 @@ class VibrationEnv(gym.Env):
         allowed = {
             "amplitude_n", "frequency_hz", "phase_rad",
             "cutting_force_noise_std_n", "process_noise_std_n",
-            "plant_variation_percent",
+            "plant_variation_percent", "harmonics", "harmonic_count",
         }
         for key, spec in self.generalized_randomization.items():
             if key not in allowed:
@@ -232,6 +232,25 @@ class VibrationEnv(gym.Env):
                 raise ValueError(f"{key} cannot have a negative minimum.")
             if key == "plant_variation_percent" and (lo < -20.0 or hi > 20.0):
                 raise ValueError("Plant randomization must stay within +/-20%.")
+            if key == "harmonic_count" and (lo < 0 or hi > 5 or not float(lo).is_integer() or not float(hi).is_integer()):
+                raise ValueError("harmonic_count must use integer values from 0 to 5.")
+        harmonic_specs = self.generalized_randomization.get("harmonics", [])
+        if not isinstance(harmonic_specs, list) or len(harmonic_specs) > 5:
+            raise ValueError("harmonics must contain at most five harmonic specifications.")
+        for index, spec in enumerate(harmonic_specs, start=2):
+            if not isinstance(spec, dict):
+                raise ValueError(f"Harmonic {index} specification must be a dictionary.")
+            for field in ("amplitude_ratio", "phase_rad"):
+                field_spec = spec.get(field, {})
+                if not isinstance(field_spec, dict):
+                    raise ValueError(f"Harmonic {index} {field} setting must be a dictionary.")
+                if not bool(field_spec.get("enabled", False)):
+                    continue
+                lo = float(field_spec.get("min")); hi = float(field_spec.get("max"))
+                if not np.isfinite(lo) or not np.isfinite(hi) or hi < lo:
+                    raise ValueError(f"Invalid harmonic {index} {field} range.")
+                if field == "amplitude_ratio" and (lo < 0 or hi > 1.0):
+                    raise ValueError(f"Harmonic {index} amplitude ratio must be 0 to 100%.")
 
     def _sample_value(self, key, fixed_value):
         spec = self.generalized_randomization.get(key, {})
@@ -408,12 +427,42 @@ class VibrationEnv(gym.Env):
                 cfg.initial_velocity_max_m_s,
             ))
 
+            harmonic_ratios = list(self.base_disturbance.harmonic_amplitudes_ratio)
+            harmonic_phases = list(self.base_disturbance.harmonic_phase_rad)
+            harmonic_specs = self.generalized_randomization.get("harmonics", [])
+            if harmonic_specs:
+                while len(harmonic_ratios) < 5:
+                    harmonic_ratios.append(0.0)
+                    harmonic_phases.append(0.0)
+                for idx, spec in enumerate(harmonic_specs):
+                    if idx >= 5:
+                        break
+                    amp_spec = spec.get("amplitude_ratio", {})
+                    phase_spec = spec.get("phase_rad", {})
+                    if bool(amp_spec.get("enabled", False)):
+                        harmonic_ratios[idx] = float(self.np_random.uniform(float(amp_spec["min"]), float(amp_spec["max"])))
+                    if bool(phase_spec.get("enabled", False)):
+                        harmonic_phases[idx] = float(self.np_random.uniform(float(phase_spec["min"]), float(phase_spec["max"])))
+                count_spec = self.generalized_randomization.get("harmonic_count", {})
+                if bool(count_spec.get("enabled", False)):
+                    count = int(self.np_random.integers(int(count_spec["min"]), int(count_spec["max"]) + 1))
+                    harmonic_ratios = harmonic_ratios[:count]
+                    harmonic_phases = harmonic_phases[:count]
+                else:
+                    active_count = 0
+                    for i, ratio in enumerate(harmonic_ratios):
+                        spec = harmonic_specs[i] if i < len(harmonic_specs) else {}
+                        if abs(float(ratio)) > 0.0 or bool(spec.get("enabled", False)):
+                            active_count = i + 1
+                    harmonic_ratios = harmonic_ratios[:active_count]
+                    harmonic_phases = harmonic_phases[:active_count]
+
             episode_disturbance = DisturbanceConfig(
                 amplitude_n=amplitude_n,
                 frequency_hz=frequency_hz,
                 phase_rad=phase_rad,
-                harmonic_amplitudes_ratio=self.base_disturbance.harmonic_amplitudes_ratio,
-                harmonic_phase_rad=self.base_disturbance.harmonic_phase_rad,
+                harmonic_amplitudes_ratio=tuple(harmonic_ratios),
+                harmonic_phase_rad=tuple(harmonic_phases),
                 noise_std_n=cutting_noise_std_n,
                 noise_seed=int(self.np_random.integers(0, 2**31 - 1)),
             )

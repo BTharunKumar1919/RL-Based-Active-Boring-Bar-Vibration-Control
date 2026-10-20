@@ -1256,6 +1256,11 @@ with st.expander("SAC training configuration", expanded=True):
 
     train_plant_label = "nominal" if plant_is_nominal(plant_variations) else "perturbed"
 
+    def _filename_number(value):
+        """Format numbers without dots so the final .zip is the only extension."""
+        text = f"{float(value):g}"
+        return text.replace("-", "m", 1).replace(".", "p")
+
     if generalized:
         active_randomized = []
         labels = [
@@ -1270,7 +1275,7 @@ with st.expander("SAC training configuration", expanded=True):
             if generalized_randomization.get(key, {}).get("enabled", False):
                 spec = generalized_randomization[key]
                 active_randomized.append(
-                    f"{label}{spec['min']:g}-{spec['max']:g}"
+                    f"{label}{_filename_number(spec['min'])}-{_filename_number(spec['max'])}"
                 )
         random_tag = "_".join(active_randomized) if active_randomized else "fixed"
         generated_name = (
@@ -1281,9 +1286,9 @@ with st.expander("SAC training configuration", expanded=True):
     else:
         generated_name = (
             f"SAC_specified_plant_{train_plant_label}_"
-            f"A{train_amp_value:g}_F{train_freq_value:g}_P{train_phase_value:g}_"
+            f"A{_filename_number(train_amp_value)}_F{_filename_number(train_freq_value)}_P{_filename_number(train_phase_value)}_"
             f"H{len(train_harmonic_ratios)}_"
-            f"CN{train_cutting_noise:g}_PN{train_process_noise:g}_"
+            f"CN{_filename_number(train_cutting_noise)}_PN{_filename_number(train_process_noise)}_"
             f"T{int(train_total_timesteps)//1000}k_seed{int(train_seed)}"
         )
 

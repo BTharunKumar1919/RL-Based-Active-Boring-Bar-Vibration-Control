@@ -40,6 +40,8 @@ def _build_metadata(model_path, training_config, plant_variations, disturbance_c
             "phase_range_rad": list(requested.get("phase_range_rad", [-3.141592653589793, 3.141592653589793])),
             "harmonic_amplitudes_ratio": list(disturbance_config.harmonic_amplitudes_ratio),
             "harmonic_phase_rad": list(disturbance_config.harmonic_phase_rad),
+            "harmonic_randomization": requested.get("generalized_randomization", {}).get("harmonics", []),
+            "harmonic_count_randomization": requested.get("generalized_randomization", {}).get("harmonic_count", {}),
             "cutting_force_noise_std_n": disturbance_config.noise_std_n,
             "cutting_force_noise_seed": disturbance_config.noise_seed,
         },
