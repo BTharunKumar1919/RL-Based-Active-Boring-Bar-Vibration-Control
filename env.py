@@ -1,6 +1,7 @@
 """Gymnasium environment for SAC control of the seven-mode plant."""
 
 from collections import deque
+from dataclasses import replace
 
 import numpy as np
 import gymnasium as gym
@@ -59,12 +60,15 @@ class VibrationEnv(gym.Env):
         phase_range_rad=(-np.pi, np.pi),
         process_noise_std_n=0.0,
         process_noise_seed=42,
+        generalized_randomization=None,
     ):
         super().__init__()
 
+        self.base_plant_config = plant_config
         self.plant_config = plant_config
         self.base_disturbance = disturbance_config
         self.training_config = training_config
+        self.generalized_randomization = generalized_randomization or {}
 
         if episode_duration_s is None:
             episode_duration_s = training_config.episode_duration_s
@@ -150,6 +154,10 @@ class VibrationEnv(gym.Env):
         self.process_noise_std_n = float(process_noise_std_n)
         self.process_noise_seed = int(process_noise_seed)
 
+        # Generalized-training randomization settings. These are deliberately
+        # limited to continuous parameters in Step 6A.
+        self._validate_generalized_randomization()
+
         # ---------------------------------------------------------
         # Plant
         # ---------------------------------------------------------
@@ -200,6 +208,71 @@ class VibrationEnv(gym.Env):
                 dtype=np.float32,
             ),
             dtype=np.float32,
+        )
+
+    def _validate_generalized_randomization(self):
+        """Validate Step 6A continuous-parameter randomization settings."""
+        allowed = {
+            "amplitude_n", "frequency_hz", "phase_rad",
+            "cutting_force_noise_std_n", "process_noise_std_n",
+            "plant_variation_percent",
+        }
+        for key, spec in self.generalized_randomization.items():
+            if key not in allowed:
+                raise ValueError(f"Unsupported generalized randomization parameter: {key}")
+            if not isinstance(spec, dict):
+                raise ValueError(f"Randomization setting for {key} must be a dictionary.")
+            if not bool(spec.get("enabled", False)):
+                continue
+            lo = float(spec.get("min"))
+            hi = float(spec.get("max"))
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi < lo:
+                raise ValueError(f"Invalid randomization range for {key}.")
+            if key in {"amplitude_n", "frequency_hz", "cutting_force_noise_std_n", "process_noise_std_n"} and lo < 0:
+                raise ValueError(f"{key} cannot have a negative minimum.")
+            if key == "plant_variation_percent" and (lo < -20.0 or hi > 20.0):
+                raise ValueError("Plant randomization must stay within +/-20%.")
+
+    def _sample_value(self, key, fixed_value):
+        spec = self.generalized_randomization.get(key, {})
+        if bool(spec.get("enabled", False)):
+            return float(self.np_random.uniform(float(spec["min"]), float(spec["max"])))
+        return float(fixed_value)
+
+    def _sample_plant_config(self):
+        """Sample physical plant parameters independently within one common percent range."""
+        spec = self.generalized_randomization.get("plant_variation_percent", {})
+        if not bool(spec.get("enabled", False)):
+            return self.base_plant_config
+
+        lo = float(spec["min"])
+        hi = float(spec["max"])
+
+        current_modes = []
+        for mode in self.base_plant_config.current_modes:
+            current_modes.append(
+                replace(
+                    mode,
+                    natural_frequency_hz=mode.natural_frequency_hz * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+                    damping_ratio=mode.damping_ratio * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+                    k_yI=mode.k_yI * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+                )
+            )
+
+        force_mode = self.base_plant_config.force_mode
+        force_mode = replace(
+            force_mode,
+            natural_frequency_hz=force_mode.natural_frequency_hz * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+            damping_ratio=force_mode.damping_ratio * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+            stiffness_n_m=force_mode.stiffness_n_m * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+        )
+
+        return replace(
+            self.base_plant_config,
+            current_modes=tuple(current_modes),
+            force_mode=force_mode,
+            actuator_bandwidth_hz=self.base_plant_config.actuator_bandwidth_hz * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
+            current_slew_rate_a_s=self.base_plant_config.current_slew_rate_a_s * (1.0 + self.np_random.uniform(lo, hi) / 100.0),
         )
 
     # =============================================================
@@ -289,53 +362,74 @@ class VibrationEnv(gym.Env):
 
         cfg = self.training_config
 
-        if self.randomize_episode:
-
-            amplitude_n = self.np_random.uniform(
-                cfg.force_amplitude_min_n,
-                cfg.force_amplitude_max_n,
+        if self.randomize_episode or self.generalized_randomization:
+            amplitude_n = self._sample_value(
+                "amplitude_n", self.base_disturbance.amplitude_n
+            )
+            frequency_hz = self._sample_value(
+                "frequency_hz", self.base_disturbance.frequency_hz
+            )
+            phase_rad = self._sample_value(
+                "phase_rad", self.base_disturbance.phase_rad
             )
 
-            frequency_hz = self.np_random.uniform(
-                cfg.force_frequency_min_hz,
-                cfg.force_frequency_max_hz,
+            cutting_noise_std_n = self._sample_value(
+                "cutting_force_noise_std_n",
+                self.base_disturbance.noise_std_n,
+            )
+            process_noise_std_n = self._sample_value(
+                "process_noise_std_n",
+                self.process_noise_std_n,
             )
 
-            phase_rad = self.np_random.uniform(
-                -np.pi,
-                np.pi,
-            )
+            if self.randomize_episode and not self.generalized_randomization:
+                # Backward-compatible Step 5 behavior: amplitude/frequency/phase
+                # are randomized from the training ranges.
+                cfg = self.training_config
+                amplitude_n = float(self.np_random.uniform(
+                    cfg.force_amplitude_min_n,
+                    cfg.force_amplitude_max_n,
+                ))
+                frequency_hz = float(self.np_random.uniform(
+                    cfg.force_frequency_min_hz,
+                    cfg.force_frequency_max_hz,
+                ))
+                phase_rad = float(self.np_random.uniform(
+                    self.phase_range_rad[0],
+                    self.phase_range_rad[1],
+                ))
 
-            initial_displacement_m = (
-                self.np_random.uniform(
-                    -cfg.initial_displacement_max_m,
-                    cfg.initial_displacement_max_m,
-                )
-            )
+            initial_displacement_m = float(self.np_random.uniform(
+                -cfg.initial_displacement_max_m,
+                cfg.initial_displacement_max_m,
+            ))
+            initial_velocity_m_s = float(self.np_random.uniform(
+                -cfg.initial_velocity_max_m_s,
+                cfg.initial_velocity_max_m_s,
+            ))
 
-            initial_velocity_m_s = (
-                self.np_random.uniform(
-                    -cfg.initial_velocity_max_m_s,
-                    cfg.initial_velocity_max_m_s,
-                )
+            episode_disturbance = DisturbanceConfig(
+                amplitude_n=amplitude_n,
+                frequency_hz=frequency_hz,
+                phase_rad=phase_rad,
+                harmonic_amplitudes_ratio=self.base_disturbance.harmonic_amplitudes_ratio,
+                harmonic_phase_rad=self.base_disturbance.harmonic_phase_rad,
+                noise_std_n=cutting_noise_std_n,
+                noise_seed=int(self.np_random.integers(0, 2**31 - 1)),
             )
-
-            episode_disturbance = (
-                DisturbanceConfig(
-                    float(amplitude_n),
-                    float(frequency_hz),
-                    float(phase_rad),
-                )
-            )
-
         else:
-
             initial_displacement_m = 0.0
             initial_velocity_m_s = 0.0
+            episode_disturbance = self.base_disturbance
+            process_noise_std_n = self.process_noise_std_n
 
-            episode_disturbance = (
-                self.base_disturbance
-            )
+        self.plant_config = self._sample_plant_config()
+        self.process_noise_std_n = float(process_noise_std_n)
+        self.plant = SevenModePlant(
+            self.plant_config,
+            process_noise_std_n=self.process_noise_std_n,
+            process_noise_seed=int(self.np_random.integers(0, 2**31 - 1)),
+        )
 
         self.force_model = (
             SinusoidalCuttingForce(

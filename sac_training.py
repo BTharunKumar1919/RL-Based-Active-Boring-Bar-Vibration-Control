@@ -60,6 +60,8 @@ def _build_metadata(model_path, training_config, plant_variations, disturbance_c
             "train_freq": training_config.train_freq,
             "gradient_steps": training_config.gradient_steps,
         },
+        "training_mode": requested.get("training_mode", "specified"),
+        "generalized_randomization": requested.get("generalized_randomization", {}),
         "requested": requested,
     }
 
@@ -89,6 +91,8 @@ def train_sac(
     gamma=None,
     train_freq=None,
     gradient_steps=None,
+    training_mode="specified",
+    generalized_randomization=None,
 ):
     """Train SAC with an explicit, reproducible configuration."""
 
@@ -108,6 +112,14 @@ def train_sac(
         raise ValueError("Frequency range must be [min, max] with 0 <= min <= max.")
     if len(phase_range_rad) != 2 or phase_range_rad[1] < phase_range_rad[0]:
         raise ValueError("Phase range must be [min, max].")
+
+    training_mode = str(training_mode).strip().lower()
+    if training_mode not in {"specified", "generalized"}:
+        raise ValueError("training_mode must be 'specified' or 'generalized'.")
+
+    generalized_randomization = generalized_randomization or {}
+    if training_mode == "specified" and generalized_randomization:
+        raise ValueError("Generalized randomization settings are only valid in generalized training mode.")
 
     harmonic_amplitudes_ratio = [] if harmonic_amplitudes_ratio is None else list(harmonic_amplitudes_ratio)
     harmonic_phase_rad = [] if harmonic_phase_rad is None else list(harmonic_phase_rad)
@@ -151,10 +163,19 @@ def train_sac(
         raise ValueError("learning_rate must be positive.")
 
     plant_config = build_plant_config(plant_variations, max_percent=20.0)
+    if training_mode == "specified":
+        amplitude_value = float(amplitude_range_n[0])
+        frequency_value = float(frequency_range_hz[0])
+        phase_value = float(phase_range_rad[0])
+    else:
+        amplitude_value = float(sum(amplitude_range_n) / 2.0)
+        frequency_value = float(sum(frequency_range_hz) / 2.0)
+        phase_value = float(sum(phase_range_rad) / 2.0)
+
     disturbance = DisturbanceConfig(
-        amplitude_n=float(sum(amplitude_range_n) / 2.0),
-        frequency_hz=float(sum(frequency_range_hz) / 2.0),
-        phase_rad=float(sum(phase_range_rad) / 2.0),
+        amplitude_n=amplitude_value,
+        frequency_hz=frequency_value,
+        phase_rad=phase_value,
         harmonic_amplitudes_ratio=tuple(float(x) for x in harmonic_amplitudes_ratio),
         harmonic_phase_rad=tuple(float(x) for x in harmonic_phase_rad),
         noise_std_n=float(cutting_force_noise_std_n),
@@ -169,10 +190,11 @@ def train_sac(
             disturbance_config=disturbance,
             training_config=training_config,
             episode_duration_s=training_config.episode_duration_s,
-            randomize_episode=True,
+            randomize_episode=(training_mode == "generalized"),
             phase_range_rad=tuple(float(x) for x in phase_range_rad),
             process_noise_std_n=float(process_noise_std_n),
             process_noise_seed=int(process_noise_seed),
+            generalized_randomization=generalized_randomization,
         )
     )
 
@@ -214,6 +236,8 @@ def train_sac(
             "phase_range_rad": list(phase_range_rad),
             "process_noise_std_n": process_noise_std_n,
             "process_noise_seed": process_noise_seed,
+            "training_mode": training_mode,
+            "generalized_randomization": generalized_randomization,
         },
     )
     metadata_path = output_path.with_suffix(".json")

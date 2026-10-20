@@ -975,88 +975,335 @@ if run_clicked:
 st.divider()
 st.subheader("Train SAC")
 st.write(
-    "Train and save a new SAC policy using the same 8-state observation "
-    "history and 5-plant-step action repeat used by the evaluation pipeline."
+    "Train and save a new SAC policy using the same observation/action "
+    "interface used by the evaluation pipeline."
 )
 
 with st.expander("SAC training configuration", expanded=True):
-    st.caption(
-        "Training uses randomized amplitude, frequency, and phase within the "
-        "ranges below. Plant perturbations use the current sidebar plant settings."
+
+    st.markdown("**Training mode**")
+    training_mode = st.radio(
+        "Choose how operating conditions are presented during training",
+        ["Specified condition", "Generalized / randomized"],
+        horizontal=True,
+        help=(
+            "Specified condition trains on one fixed continuous operating "
+            "condition. Generalized training samples selected continuous "
+            "parameters independently at the start of each episode."
+        ),
     )
+    generalized = training_mode == "Generalized / randomized"
 
-    t1, t2, t3 = st.columns(3)
-    with t1:
-        train_total_timesteps = st.number_input("Total timesteps", min_value=1_000, max_value=20_000_000, value=300_000, step=10_000)
-        train_seed = st.number_input("Seed", min_value=0, max_value=2_147_483_647, value=42, step=1)
-        train_episode_duration = st.number_input("Episode duration (s)", min_value=0.01, max_value=2.0, value=0.2, step=0.01, format="%.3f")
-    with t2:
-        train_amp_min = st.number_input("Amplitude min (N)", min_value=0.0, max_value=10.0, value=0.5, step=0.1)
-        train_amp_max = st.number_input("Amplitude max (N)", min_value=0.0, max_value=10.0, value=1.5, step=0.1)
-        train_freq_min = st.number_input("Frequency min (Hz)", min_value=0.0, max_value=1000.0, value=150.0, step=5.0)
-        train_freq_max = st.number_input("Frequency max (Hz)", min_value=0.0, max_value=1000.0, value=200.0, step=5.0)
-    with t3:
-        train_phase_min = st.number_input("Phase min (rad)", min_value=-100.0, max_value=100.0, value=-np.pi, step=0.1, format="%.3f")
-        train_phase_max = st.number_input("Phase max (rad)", min_value=-100.0, max_value=100.0, value=np.pi, step=0.1, format="%.3f")
-        train_process_noise = st.number_input("Process noise RMS (N)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
-        train_process_seed = st.number_input("Process-noise seed", min_value=0, max_value=2_147_483_647, value=42, step=1)
+    if not generalized:
+        st.info(
+            "Specified mode: amplitude, frequency, phase, cutting-force noise, "
+            "process noise, and plant model remain fixed during training. "
+            "Harmonics are also fixed."
+        )
 
-    st.markdown("**Cutting-force harmonics and noise**")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            train_amp_value = st.number_input(
+                "Force amplitude (N)", min_value=0.0, max_value=10.0,
+                value=1.0, step=0.1
+            )
+            train_freq_value = st.number_input(
+                "Force frequency (Hz)", min_value=0.0, max_value=1000.0,
+                value=174.0, step=5.0
+            )
+        with s2:
+            train_phase_value = st.number_input(
+                "Fundamental phase (rad)", min_value=-100.0, max_value=100.0,
+                value=0.0, step=0.1, format="%.3f"
+            )
+            train_process_noise = st.number_input(
+                "Process noise RMS (N)", min_value=0.0, max_value=1.0,
+                value=0.0, step=0.01
+            )
+        with s3:
+            train_process_seed = st.number_input(
+                "Process-noise seed", min_value=0, max_value=2_147_483_647,
+                value=42, step=1
+            )
+            train_cutting_noise = st.number_input(
+                "Cutting-force noise RMS (N)", min_value=0.0, max_value=1.0,
+                value=0.0, step=0.01
+            )
+            train_cutting_seed = st.number_input(
+                "Cutting-force noise seed", min_value=0, max_value=2_147_483_647,
+                value=42, step=1
+            )
+
+        generalized_randomization = {}
+        train_amp_min, train_amp_max = float(train_amp_value), float(train_amp_value)
+        train_freq_min, train_freq_max = float(train_freq_value), float(train_freq_value)
+        train_phase_min, train_phase_max = float(train_phase_value), float(train_phase_value)
+
+    else:
+        st.info(
+            "Generalized mode samples each enabled continuous parameter "
+            "independently for every episode. Parameters left unchecked stay "
+            "at their fixed values."
+        )
+
+        g1, g2, g3 = st.columns(3)
+
+        with g1:
+            st.markdown("**Force amplitude**")
+            rand_amp = st.checkbox("Randomize amplitude", value=True, key="rand_train_amp")
+            train_amp_min = st.number_input(
+                "Amplitude min (N)", min_value=0.0, max_value=10.0,
+                value=0.5, step=0.1, key="train_amp_min_g"
+            )
+            train_amp_max = st.number_input(
+                "Amplitude max (N)", min_value=0.0, max_value=10.0,
+                value=1.5, step=0.1, key="train_amp_max_g"
+            )
+
+            st.markdown("**Force frequency**")
+            rand_freq = st.checkbox("Randomize frequency", value=True, key="rand_train_freq")
+            train_freq_min = st.number_input(
+                "Frequency min (Hz)", min_value=0.0, max_value=1000.0,
+                value=150.0, step=5.0, key="train_freq_min_g"
+            )
+            train_freq_max = st.number_input(
+                "Frequency max (Hz)", min_value=0.0, max_value=1000.0,
+                value=200.0, step=5.0, key="train_freq_max_g"
+            )
+
+        with g2:
+            st.markdown("**Fundamental phase**")
+            rand_phase = st.checkbox("Randomize phase", value=True, key="rand_train_phase")
+            train_phase_min = st.number_input(
+                "Phase min (rad)", min_value=-100.0, max_value=100.0,
+                value=-np.pi, step=0.1, format="%.3f", key="train_phase_min_g"
+            )
+            train_phase_max = st.number_input(
+                "Phase max (rad)", min_value=-100.0, max_value=100.0,
+                value=np.pi, step=0.1, format="%.3f", key="train_phase_max_g"
+            )
+
+            st.markdown("**Cutting-force noise**")
+            rand_cutting_noise = st.checkbox(
+                "Randomize cutting-force noise", value=False,
+                key="rand_train_cutting_noise"
+            )
+            train_cutting_noise_min = st.number_input(
+                "Noise RMS min (N)", min_value=0.0, max_value=1.0,
+                value=0.0, step=0.01, key="train_cn_min"
+            )
+            train_cutting_noise_max = st.number_input(
+                "Noise RMS max (N)", min_value=0.0, max_value=1.0,
+                value=0.1, step=0.01, key="train_cn_max"
+            )
+
+        with g3:
+            st.markdown("**Process noise**")
+            rand_process_noise = st.checkbox(
+                "Randomize process noise", value=False,
+                key="rand_train_process_noise"
+            )
+            train_process_noise_min = st.number_input(
+                "Process noise min (N)", min_value=0.0, max_value=1.0,
+                value=0.0, step=0.01, key="train_pn_min"
+            )
+            train_process_noise_max = st.number_input(
+                "Process noise max (N)", min_value=0.0, max_value=1.0,
+                value=0.2, step=0.01, key="train_pn_max"
+            )
+
+            st.markdown("**Plant parameters**")
+            rand_plant = st.checkbox(
+                "Randomize plant parameters", value=False,
+                key="rand_train_plant"
+            )
+            train_plant_var_min = st.number_input(
+                "Plant variation min (%)", min_value=-20.0, max_value=20.0,
+                value=-10.0, step=1.0, key="train_plant_var_min"
+            )
+            train_plant_var_max = st.number_input(
+                "Plant variation max (%)", min_value=-20.0, max_value=20.0,
+                value=10.0, step=1.0, key="train_plant_var_max"
+            )
+
+        # Non-randomized values are taken from the midpoint of the displayed
+        # range for amplitude/frequency/phase and from the lower value for noise.
+        # These are used as fixed values when the corresponding checkbox is off.
+        if not rand_amp:
+            train_amp_min = train_amp_max = float((train_amp_min + train_amp_max) / 2.0)
+        if not rand_freq:
+            train_freq_min = train_freq_max = float((train_freq_min + train_freq_max) / 2.0)
+        if not rand_phase:
+            train_phase_min = train_phase_max = float((train_phase_min + train_phase_max) / 2.0)
+
+        generalized_randomization = {
+            "amplitude_n": {
+                "enabled": bool(rand_amp),
+                "min": float(train_amp_min),
+                "max": float(train_amp_max),
+            },
+            "frequency_hz": {
+                "enabled": bool(rand_freq),
+                "min": float(train_freq_min),
+                "max": float(train_freq_max),
+            },
+            "phase_rad": {
+                "enabled": bool(rand_phase),
+                "min": float(train_phase_min),
+                "max": float(train_phase_max),
+            },
+            "cutting_force_noise_std_n": {
+                "enabled": bool(rand_cutting_noise),
+                "min": float(train_cutting_noise_min),
+                "max": float(train_cutting_noise_max),
+            },
+            "process_noise_std_n": {
+                "enabled": bool(rand_process_noise),
+                "min": float(train_process_noise_min),
+                "max": float(train_process_noise_max),
+            },
+            "plant_variation_percent": {
+                "enabled": bool(rand_plant),
+                "min": float(train_plant_var_min),
+                "max": float(train_plant_var_max),
+            },
+        }
+
+        # Fixed values used when a parameter is not randomized.
+        train_process_noise = float(train_process_noise_min)
+        train_cutting_noise = float(train_cutting_noise_min)
+        train_process_seed = 42
+        train_cutting_seed = 42
+
+    st.markdown("**Cutting-force harmonics — fixed during Step 6A**")
     hcols = st.columns(5)
     train_harmonic_ratios = []
     train_harmonic_phases = []
     for i, col in enumerate(hcols, start=2):
         with col:
-            enabled = st.checkbox(f"{i}f", value=False, key=f"train_h{i}_enabled")
-            ratio = st.number_input(f"{i}f amplitude (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key=f"train_h{i}_ratio")
-            phase = st.number_input(f"{i}f phase (rad)", min_value=-100.0, max_value=100.0, value=0.0, step=0.1, key=f"train_h{i}_phase")
+            enabled = st.checkbox(
+                f"{i}f", value=False, key=f"train_h{i}_enabled"
+            )
+            ratio = st.number_input(
+                f"{i}f amplitude (%)", min_value=0.0, max_value=100.0,
+                value=0.0, step=1.0, key=f"train_h{i}_ratio"
+            )
+            phase = st.number_input(
+                f"{i}f phase (rad)", min_value=-100.0, max_value=100.0,
+                value=0.0, step=0.1, key=f"train_h{i}_phase"
+            )
             if enabled:
                 train_harmonic_ratios.append(float(ratio) / 100.0)
                 train_harmonic_phases.append(float(phase))
 
-    tn1, tn2 = st.columns(2)
-    with tn1:
-        train_cutting_noise = st.number_input("Cutting-force noise RMS (N)", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
-    with tn2:
-        train_cutting_seed = st.number_input("Cutting-force noise seed", min_value=0, max_value=2_147_483_647, value=42, step=1)
+    st.markdown("**Training / SAC settings**")
+    t1, t2, t3 = st.columns(3)
+    with t1:
+        train_total_timesteps = st.number_input(
+            "Total timesteps", min_value=1_000, max_value=20_000_000,
+            value=300_000, step=10_000
+        )
+        train_seed = st.number_input(
+            "Seed", min_value=0, max_value=2_147_483_647, value=42, step=1
+        )
+        train_episode_duration = st.number_input(
+            "Episode duration (s)", min_value=0.01, max_value=2.0,
+            value=0.2, step=0.01, format="%.3f"
+        )
+    with t2:
+        train_lr = st.number_input(
+            "Learning rate", min_value=1e-8, max_value=1.0,
+            value=3e-4, format="%.2e"
+        )
+        train_buffer = st.number_input(
+            "Buffer size", min_value=1_000, max_value=5_000_000,
+            value=200_000, step=10_000
+        )
+        train_learning_starts = st.number_input(
+            "Learning starts", min_value=0, max_value=5_000_000,
+            value=5_000, step=500
+        )
+        train_batch = st.number_input(
+            "Batch size", min_value=1, max_value=8192, value=256, step=32
+        )
+    with t3:
+        train_tau = st.number_input(
+            "Tau", min_value=1e-6, max_value=1.0,
+            value=0.005, format="%.3f"
+        )
+        train_gamma = st.number_input(
+            "Gamma", min_value=1e-6, max_value=1.0,
+            value=0.99, format="%.3f"
+        )
+        train_freq = st.number_input(
+            "Train frequency", min_value=1, max_value=1000, value=1, step=1
+        )
+        train_gradient_steps = st.number_input(
+            "Gradient steps", min_value=1, max_value=1000, value=1, step=1
+        )
 
-    st.markdown("**SAC hyperparameters**")
-    h1, h2, h3, h4 = st.columns(4)
-    with h1:
-        train_lr = st.number_input("Learning rate", min_value=1e-8, max_value=1.0, value=3e-4, format="%.2e")
-        train_buffer = st.number_input("Buffer size", min_value=1_000, max_value=5_000_000, value=200_000, step=10_000)
-        train_learning_starts = st.number_input("Learning starts", min_value=0, max_value=5_000_000, value=5_000, step=500)
-    with h2:
-        train_batch = st.number_input("Batch size", min_value=1, max_value=8192, value=256, step=32)
-        train_tau = st.number_input("Tau", min_value=1e-6, max_value=1.0, value=0.005, format="%.3f")
-        train_gamma = st.number_input("Gamma", min_value=1e-6, max_value=1.0, value=0.99, format="%.3f")
-    with h3:
-        train_freq = st.number_input("Train frequency", min_value=1, max_value=1000, value=1, step=1)
-        train_gradient_steps = st.number_input("Gradient steps", min_value=1, max_value=1000, value=1, step=1)
-    with h4:
-        train_action_repeat = st.number_input("Action repeat", min_value=1, max_value=100, value=5, step=1)
-        train_history = st.number_input("Observation history", min_value=1, max_value=64, value=8, step=1)
+    timing1, timing2 = st.columns(2)
+    with timing1:
+        train_action_repeat = st.number_input(
+            "Action repeat", min_value=1, max_value=100,
+            value=5, step=1
+        )
+    with timing2:
+        train_history = st.number_input(
+            "Observation history", min_value=1, max_value=64,
+            value=8, step=1
+        )
 
     train_plant_label = "nominal" if plant_is_nominal(plant_variations) else "perturbed"
-    generated_name = (
-        f"SAC_plant_{train_plant_label}_"
-        f"A{train_amp_min:g}-{train_amp_max:g}_"
-        f"F{train_freq_min:g}-{train_freq_max:g}_"
-        f"P{train_phase_min:g}-{train_phase_max:g}_"
-        f"H{len(train_harmonic_ratios)}_"
-        f"CN{train_cutting_noise:g}_PN{train_process_noise:g}_"
-        f"T{int(train_total_timesteps)//1000}k_seed{int(train_seed)}"
-    )
 
-    if "training_model_name" not in st.session_state:
+    if generalized:
+        active_randomized = []
+        labels = [
+            ("amplitude_n", "A"),
+            ("frequency_hz", "F"),
+            ("phase_rad", "P"),
+            ("cutting_force_noise_std_n", "CN"),
+            ("process_noise_std_n", "PN"),
+            ("plant_variation_percent", "PV"),
+        ]
+        for key, label in labels:
+            if generalized_randomization.get(key, {}).get("enabled", False):
+                spec = generalized_randomization[key]
+                active_randomized.append(
+                    f"{label}{spec['min']:g}-{spec['max']:g}"
+                )
+        random_tag = "_".join(active_randomized) if active_randomized else "fixed"
+        generated_name = (
+            f"SAC_generalized_plant_{train_plant_label}_"
+            f"{random_tag}_H{len(train_harmonic_ratios)}_"
+            f"T{int(train_total_timesteps)//1000}k_seed{int(train_seed)}"
+        )
+    else:
+        generated_name = (
+            f"SAC_specified_plant_{train_plant_label}_"
+            f"A{train_amp_value:g}_F{train_freq_value:g}_P{train_phase_value:g}_"
+            f"H{len(train_harmonic_ratios)}_"
+            f"CN{train_cutting_noise:g}_PN{train_process_noise:g}_"
+            f"T{int(train_total_timesteps)//1000}k_seed{int(train_seed)}"
+        )
+
+    # Keep a custom filename if the user edited it; otherwise update the
+    # default automatically when the training configuration changes.
+    previous_generated = st.session_state.get("training_generated_name")
+    previous_name = st.session_state.get("training_model_name")
+    if (
+        previous_name is None
+        or previous_name == previous_generated
+    ):
         st.session_state["training_model_name"] = generated_name
+    st.session_state["training_generated_name"] = generated_name
 
     n1, n2 = st.columns([5, 1])
     with n1:
         training_model_name = st.text_input(
             "Model filename (editable)",
             key="training_model_name",
-            help="The generated descriptive name is only a default. You can replace it before training/saving.",
+            help="The generated descriptive name is the default. You can replace it before training/saving.",
         )
     with n2:
         st.write("")
@@ -1067,21 +1314,51 @@ with st.expander("SAC training configuration", expanded=True):
 
     st.caption(f"Generated default: `{generated_name}.zip`")
 
-    if not plant_is_nominal(plant_variations):
-        st.warning("The current perturbed plant settings will be used for training. This makes the resulting policy specific to that plant model.")
+    if generalized and generalized_randomization.get("plant_variation_percent", {}).get("enabled", False):
+        st.info(
+            "Plant randomization independently perturbs the six current-mode "
+            "frequencies/damping/force coefficients, force-mode parameters, "
+            "and actuator bandwidth/slew rate within the selected percentage range. "
+            "The interface limits this to ±20%."
+        )
 
-    train_clicked = st.button("Train & save SAC model", type="primary", use_container_width=True)
+    if not generalized and not plant_is_nominal(plant_variations):
+        st.warning(
+            "The current sidebar plant model will be used as the fixed training plant."
+        )
+
+    train_clicked = st.button(
+        "Train & save SAC model",
+        type="primary",
+        use_container_width=True,
+    )
 
     if train_clicked:
+        valid = True
         if train_amp_max < train_amp_min:
             st.error("Amplitude max must be >= amplitude min.")
-        elif train_freq_max < train_freq_min:
+            valid = False
+        if train_freq_max < train_freq_min:
             st.error("Frequency max must be >= frequency min.")
-        elif train_phase_max < train_phase_min:
+            valid = False
+        if train_phase_max < train_phase_min:
             st.error("Phase max must be >= phase min.")
-        elif not training_model_name.strip():
+            valid = False
+        if generalized:
+            for key, label in [
+                ("cutting_force_noise_std_n", "Cutting-force noise"),
+                ("process_noise_std_n", "Process noise"),
+                ("plant_variation_percent", "Plant variation"),
+            ]:
+                spec = generalized_randomization[key]
+                if spec["max"] < spec["min"]:
+                    st.error(f"{label} maximum must be >= minimum.")
+                    valid = False
+        if not training_model_name.strip():
             st.error("Model filename cannot be empty.")
-        else:
+            valid = False
+
+        if valid:
             training_payload = {
                 "model_name": training_model_name.strip(),
                 "total_timesteps": int(train_total_timesteps),
@@ -1107,13 +1384,26 @@ with st.expander("SAC training configuration", expanded=True):
                 "gamma": float(train_gamma),
                 "train_freq": int(train_freq),
                 "gradient_steps": int(train_gradient_steps),
+                "training_mode": "generalized" if generalized else "specified",
+                "generalized_randomization": generalized_randomization,
             }
             try:
-                with st.spinner("Training SAC. This can take a while for large timestep counts..."):
-                    train_result = api_post("/train", training_payload, timeout=3600)
-                st.success(f"Training complete. Saved model: `{train_result['model_path']}`")
+                with st.spinner(
+                    "Training SAC. This can take a while for large timestep counts..."
+                ):
+                    train_result = api_post(
+                        "/train",
+                        training_payload,
+                        timeout=3600,
+                    )
+                st.success(
+                    f"Training complete. Saved model: `{train_result['model_path']}`"
+                )
                 st.json(train_result.get("metadata", {}))
-                st.info("Refresh the dashboard or the model list to make the new model available for selection.")
+                st.info(
+                    "The new model is now saved with metadata describing the "
+                    "training mode and randomization settings."
+                )
             except requests.HTTPError as exc:
                 detail = exc.response.text if exc.response is not None else str(exc)
                 st.error(f"SAC training failed: {detail}")

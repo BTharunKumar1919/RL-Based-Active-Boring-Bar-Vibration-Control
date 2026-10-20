@@ -242,6 +242,8 @@ class SACTrainingRequest(BaseModel):
     gamma: float = Field(default=0.99, gt=0.0, le=1.0)
     train_freq: int = Field(default=1, ge=1, le=1000)
     gradient_steps: int = Field(default=1, ge=1, le=1000)
+    training_mode: Literal["specified", "generalized"] = "specified"
+    generalized_randomization: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.get("/")
@@ -435,6 +437,8 @@ def train(request: SACTrainingRequest):
             gamma=request.gamma,
             train_freq=request.train_freq,
             gradient_steps=request.gradient_steps,
+            training_mode=request.training_mode,
+            generalized_randomization=request.generalized_randomization,
         )
         _load_sac_model.cache_clear()
         return {"status": "completed", "model_path": str(model_path), "metadata": metadata}
