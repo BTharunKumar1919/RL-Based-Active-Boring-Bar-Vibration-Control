@@ -122,16 +122,111 @@ def make_robust_summary_table(summary):
         rows.append({
             "Controller": item["controller"],
             "Mean steady RMS (µm)": item["mean_steady_rms_vibration_um"],
+            "Best-case steady RMS (µm)": item["best_case_steady_rms_vibration_um"],
             "Worst-case steady RMS (µm)": item["worst_case_steady_rms_vibration_um"],
             "Mean peak (µm)": item["mean_peak_vibration_um"],
             "Mean RMS current (A)": item["mean_rms_control_current_a"],
             "Mean saturation (%)": item["mean_hard_saturation_percent"],
             "Mean vibration reduction (%)": item["mean_vibration_reduction_percent"],
+            "Best vibration reduction (%)": item["best_vibration_reduction_percent"],
             "Worst vibration reduction (%)": item["worst_vibration_reduction_percent"],
             "Success rate (%)": item["success_rate_percent"],
             "Robust score": item["composite_robust_score"],
         })
     return pd.DataFrame(rows)
+
+
+
+def make_robust_heatmap(cases, controller, value_column, title, colorbar_title):
+    subset = cases[cases["controller"] == controller].copy()
+    pivot = subset.pivot_table(
+        index="amplitude_n",
+        columns="frequency_hz",
+        values=value_column,
+        aggfunc="mean",
+    ).sort_index()
+
+    fig = go.Figure(
+        go.Heatmap(
+            x=pivot.columns.tolist(),
+            y=pivot.index.tolist(),
+            z=pivot.to_numpy(),
+            colorbar={"title": colorbar_title},
+            hovertemplate=(
+                "Frequency: %{x:.1f} Hz<br>"
+                "Amplitude: %{y:.3g} N<br>"
+                f"{colorbar_title}: %{{z:.4g}}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        title=title,
+        xaxis_title="Disturbance frequency (Hz)",
+        yaxis_title="Cutting-force amplitude (N)",
+        margin={"l": 15, "r": 15, "t": 60, "b": 15},
+    )
+    return fig
+
+
+def make_robust_frequency_plot(cases, value_column, title, y_label):
+    grouped = (
+        cases.groupby(["controller", "frequency_hz"], as_index=False)[value_column]
+        .mean()
+        .sort_values("frequency_hz")
+    )
+
+    fig = go.Figure()
+    for controller in CONTROLLERS:
+        data = grouped[grouped["controller"] == controller]
+        if data.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=data["frequency_hz"],
+                y=data[value_column],
+                name=controller,
+                mode="lines+markers",
+                line={"color": COLORS[controller], "width": 2},
+            )
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Disturbance frequency (Hz)",
+        yaxis_title=y_label,
+        hovermode="x unified",
+        margin={"l": 15, "r": 15, "t": 60, "b": 15},
+    )
+    return fig
+
+
+def make_robust_best_mean_worst_plot(summary, mean_col, best_col, worst_col, title, y_label):
+    rows = []
+    for item in summary:
+        rows.append({
+            "Controller": item["controller"],
+            "Best": item[best_col],
+            "Mean": item[mean_col],
+            "Worst": item[worst_col],
+        })
+    frame = pd.DataFrame(rows)
+    long = frame.melt("Controller", var_name="Statistic", value_name="Value")
+
+    fig = px.bar(
+        long,
+        x="Controller",
+        y="Value",
+        color="Statistic",
+        barmode="group",
+        title=title,
+        text_auto=".4g",
+    )
+    fig.update_layout(
+        yaxis_title=y_label,
+        xaxis_title="Controller",
+        margin={"l": 15, "r": 15, "t": 60, "b": 15},
+    )
+    return fig
 
 
 def make_trace_plot(traces, y_column, title, y_label):
@@ -641,99 +736,6 @@ except requests.RequestException as exc:
 
 
 # ---------------------------------------------------------------------
-# Robust evaluation
-# ---------------------------------------------------------------------
-
-st.divider()
-st.subheader("Robust evaluation")
-st.write(
-    "Evaluate No Control, PID, and SAC over the standard 3 × 7 × 4 operating-condition grid "
-    "(amplitude × frequency × phase). The same plant and noise realization is used for all controllers."
-)
-
-robust_duration_s = st.number_input(
-    "Robust evaluation duration per case (s)",
-    min_value=0.02,
-    max_value=0.5,
-    value=0.2,
-    step=0.02,
-    key="robust_duration",
-)
-
-robust_run = st.button(
-    "Run standard robust evaluation (84 cases)",
-    use_container_width=True,
-)
-
-if robust_run:
-    robust_payload = {
-        "amplitudes_n": [0.5, 1.0, 1.5],
-        "frequencies_hz": [150.0, 160.0, 174.0, 185.0, 200.0, 205.0, 215.0],
-        "phases_rad": [0.0, float(np.pi / 2.0), float(np.pi), float(3.0 * np.pi / 2.0)],
-        "duration_s": float(robust_duration_s),
-        "plant_variations": plant_variations,
-        "process_noise_std_n": float(process_noise_std_n),
-        "process_noise_seed": int(process_noise_seed),
-        "harmonic_amplitudes_ratio": harmonic_amplitudes_ratio,
-        "harmonic_phase_rad": harmonic_phase_rad,
-        "cutting_force_noise_std_n": float(cutting_force_noise_std_n),
-        "cutting_force_noise_seed": int(cutting_force_noise_seed),
-        "pid_gains": {
-            "kp": float(pid_kp),
-            "ki": float(pid_ki),
-            "kd": float(pid_kd),
-            "integral_limit_m_s": float(pid_integral_limit),
-        },
-    }
-
-    try:
-        with st.spinner("Running 84-condition robust evaluation... this may take a while."):
-            robust_result = api_post("/robust-evaluation", robust_payload)
-        st.session_state["robust_result"] = robust_result
-        st.success("Robust evaluation completed.")
-    except requests.HTTPError as exc:
-        detail = exc.response.text if exc.response is not None else str(exc)
-        st.error(f"API returned an error: {detail}")
-    except requests.RequestException as exc:
-        st.error(f"Robust evaluation request failed: {exc}")
-
-if "robust_result" in st.session_state:
-    robust_result = st.session_state["robust_result"]
-    robust_summary = make_robust_summary_table(robust_result["summary"])
-
-    st.markdown("**Robust summary**")
-    st.dataframe(
-        robust_summary.style.format({
-            "Mean steady RMS (µm)": "{:.4f}",
-            "Worst-case steady RMS (µm)": "{:.4f}",
-            "Mean peak (µm)": "{:.4f}",
-            "Mean RMS current (A)": "{:.4f}",
-            "Mean saturation (%)": "{:.2f}",
-            "Mean vibration reduction (%)": "{:.2f}",
-            "Worst vibration reduction (%)": "{:.2f}",
-            "Success rate (%)": "{:.1f}",
-            "Robust score": "{:.2f}",
-        }),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.caption(
-        "Robust score = 70% mean vibration reduction versus No Control + 30% low-RMS-current term. "
-        "Saturation is reported separately. It is a project comparison metric, not a physical standard."
-    )
-
-    robust_cases = pd.DataFrame(robust_result["cases"])
-    st.download_button(
-        "Download robust evaluation cases (CSV)",
-        data=to_csv_bytes(robust_cases),
-        file_name="robust_evaluation_cases.csv",
-        mime="text/csv",
-        key="download_robust_cases",
-    )
-
-
-# ---------------------------------------------------------------------
 # Run simulations
 # ---------------------------------------------------------------------
 
@@ -1180,7 +1182,7 @@ with st.expander("Model assumptions and limitations"):
         - The SAC policy is loaded from a previously trained model;
           this dashboard does not train it.
         - PID gains are user-configurable from the dashboard; SAC uses a learned policy.
-        - Robust evaluation uses the standard amplitude/frequency/phase grid and reports both per-case and aggregate metrics.
+        - Robust evaluation uses a user-defined amplitude/frequency/phase grid and reports both per-case and aggregate metrics.
         - Sensor noise, Kalman filtering, amplifier dynamics, and
           randomized plant parameters are not included in this phase.
         - The SAC action is mapped to the 5 A continuous current limit
@@ -1198,3 +1200,233 @@ with st.expander("Model assumptions and limitations"):
 st.caption(
     "Educational simulation only — not connected to physical machinery."
 )
+
+# ---------------------------------------------------------------------
+# Robust evaluation
+# ---------------------------------------------------------------------
+
+st.divider()
+st.subheader("Robust evaluation")
+st.write(
+    "Evaluate No Control, PID, and SAC over a user-defined grid of "
+    "amplitude × frequency × phase. The same plant and noise realization "
+    "is used for all controllers in every condition."
+)
+
+with st.expander("Robust evaluation grid", expanded=True):
+    r1, r2, r3 = st.columns(3)
+
+    with r1:
+        robust_amp_min = st.number_input(
+            "Amplitude minimum (N)", 0.0, 10.0, 0.5, 0.1, key="robust_amp_min"
+        )
+        robust_amp_max = st.number_input(
+            "Amplitude maximum (N)", 0.0, 10.0, 1.5, 0.1, key="robust_amp_max"
+        )
+        robust_amp_divisions = st.number_input(
+            "Amplitude divisions", 1, 24, 2, 1, key="robust_amp_divisions",
+            help="Number of equal intervals. Endpoints are included, so N divisions produce N+1 values."
+        )
+
+    with r2:
+        robust_freq_min = st.number_input(
+            "Frequency minimum (Hz)", 0.0, 1000.0, 150.0, 1.0, key="robust_freq_min"
+        )
+        robust_freq_max = st.number_input(
+            "Frequency maximum (Hz)", 0.0, 1000.0, 215.0, 1.0, key="robust_freq_max"
+        )
+        robust_freq_divisions = st.number_input(
+            "Frequency divisions", 1, 24, 6, 1, key="robust_freq_divisions",
+            help="Number of equal intervals. Endpoints are included, so N divisions produce N+1 values."
+        )
+
+    with r3:
+        robust_phase_min = st.number_input(
+            "Phase minimum (rad)", -10.0, 10.0, 0.0, 0.1, key="robust_phase_min"
+        )
+        robust_phase_max = st.number_input(
+            "Phase maximum (rad)", -10.0, 10.0, float(3.0 * np.pi / 2.0), 0.1, key="robust_phase_max"
+        )
+        robust_phase_divisions = st.number_input(
+            "Phase divisions", 1, 24, 3, 1, key="robust_phase_divisions",
+            help="Number of equal intervals. Endpoints are included, so N divisions produce N+1 values."
+        )
+
+    robust_duration_s = st.number_input(
+        "Robust evaluation duration per case (s)",
+        min_value=0.02,
+        max_value=0.5,
+        value=0.2,
+        step=0.02,
+        key="robust_duration",
+    )
+
+    amplitudes_preview = np.linspace(robust_amp_min, robust_amp_max, int(robust_amp_divisions) + 1)
+    frequencies_preview = np.linspace(robust_freq_min, robust_freq_max, int(robust_freq_divisions) + 1)
+    phases_preview = np.linspace(robust_phase_min, robust_phase_max, int(robust_phase_divisions) + 1)
+    preview_cases = len(amplitudes_preview) * len(frequencies_preview) * len(phases_preview)
+    grid_valid = (robust_amp_max >= robust_amp_min and robust_freq_max >= robust_freq_min and robust_phase_max >= robust_phase_min)
+
+    if not grid_valid:
+        st.error("For each parameter, the maximum must be greater than or equal to the minimum.")
+    if preview_cases > 500:
+        st.error(f"This grid contains {preview_cases} conditions. Reduce the number of divisions; the limit is 500 conditions.")
+
+    st.caption(
+        f"Grid: {len(amplitudes_preview)} amplitudes × {len(frequencies_preview)} frequencies × "
+        f"{len(phases_preview)} phases = **{preview_cases} conditions**. "
+        "The backend limit is 500 conditions."
+    )
+
+robust_run = st.button(
+    f"Run robust evaluation ({preview_cases} cases)",
+    use_container_width=True,
+    disabled=(not grid_valid or preview_cases > 500),
+)
+
+if robust_run:
+    robust_payload = {
+        "amplitudes_n": [float(x) for x in amplitudes_preview],
+        "frequencies_hz": [float(x) for x in frequencies_preview],
+        "phases_rad": [float(x) for x in phases_preview],
+        "duration_s": float(robust_duration_s),
+        "plant_variations": plant_variations,
+        "process_noise_std_n": float(process_noise_std_n),
+        "process_noise_seed": int(process_noise_seed),
+        "harmonic_amplitudes_ratio": harmonic_amplitudes_ratio,
+        "harmonic_phase_rad": harmonic_phase_rad,
+        "cutting_force_noise_std_n": float(cutting_force_noise_std_n),
+        "cutting_force_noise_seed": int(cutting_force_noise_seed),
+        "pid_gains": {
+            "kp": float(pid_kp),
+            "ki": float(pid_ki),
+            "kd": float(pid_kd),
+            "integral_limit_m_s": float(pid_integral_limit),
+        },
+    }
+
+    try:
+        with st.spinner(f"Running {preview_cases}-condition robust evaluation... this may take a while."):
+            robust_result = api_post("/robust-evaluation", robust_payload)
+        st.session_state["robust_result"] = robust_result
+        st.success("Robust evaluation completed.")
+    except requests.HTTPError as exc:
+        detail = exc.response.text if exc.response is not None else str(exc)
+        st.error(f"API returned an error: {detail}")
+    except requests.RequestException as exc:
+        st.error(f"Robust evaluation request failed: {exc}")
+
+if "robust_result" in st.session_state:
+    robust_result = st.session_state["robust_result"]
+    robust_summary = make_robust_summary_table(robust_result["summary"])
+    robust_cases = pd.DataFrame(robust_result["cases"])
+
+    st.markdown("**Robust summary**")
+    st.dataframe(
+        robust_summary.style.format({
+            "Mean steady RMS (µm)": "{:.4f}",
+            "Best-case steady RMS (µm)": "{:.4f}",
+            "Worst-case steady RMS (µm)": "{:.4f}",
+            "Mean peak (µm)": "{:.4f}",
+            "Mean RMS current (A)": "{:.4f}",
+            "Mean saturation (%)": "{:.2f}",
+            "Mean vibration reduction (%)": "{:.2f}",
+            "Best vibration reduction (%)": "{:.2f}",
+            "Worst vibration reduction (%)": "{:.2f}",
+            "Success rate (%)": "{:.1f}",
+            "Robust score": "{:.2f}",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "Robust score = 70% mean vibration reduction versus No Control + 30% low-RMS-current term. "
+        "Saturation is reported separately. It is a project comparison metric, not a physical standard."
+    )
+
+    st.markdown("**Robust variation plots**")
+
+    plot_controller = st.selectbox(
+        "Controller for amplitude × frequency map",
+        CONTROLLERS,
+        key="robust_plot_controller",
+    )
+
+    p1, p2 = st.columns(2)
+    with p1:
+        st.plotly_chart(
+            make_robust_heatmap(
+                robust_cases,
+                plot_controller,
+                "steady_rms_vibration_um",
+                f"Steady RMS across amplitude and frequency — {plot_controller}",
+                "Steady RMS (µm)",
+            ),
+            use_container_width=True,
+        )
+
+    with p2:
+        st.plotly_chart(
+            make_robust_heatmap(
+                robust_cases,
+                plot_controller,
+                "steady_rms_reduction_vs_no_control_percent",
+                f"Vibration reduction across amplitude and frequency — {plot_controller}",
+                "Reduction (%)",
+            ),
+            use_container_width=True,
+        )
+
+    st.plotly_chart(
+        make_robust_frequency_plot(
+            robust_cases,
+            "steady_rms_vibration_um",
+            "Mean steady RMS versus disturbance frequency",
+            "Mean steady RMS (µm)",
+        ),
+        use_container_width=True,
+    )
+
+    st.plotly_chart(
+        make_robust_frequency_plot(
+            robust_cases,
+            "steady_rms_reduction_vs_no_control_percent",
+            "Mean vibration reduction versus disturbance frequency",
+            "Mean reduction vs No Control (%)",
+        ),
+        use_container_width=True,
+    )
+
+    st.plotly_chart(
+        make_robust_best_mean_worst_plot(
+            robust_result["summary"],
+            "mean_steady_rms_vibration_um",
+            "best_case_steady_rms_vibration_um",
+            "worst_case_steady_rms_vibration_um",
+            "Best, mean, and worst steady RMS",
+            "Steady RMS (µm)",
+        ),
+        use_container_width=True,
+    )
+
+    st.plotly_chart(
+        make_robust_best_mean_worst_plot(
+            robust_result["summary"],
+            "mean_vibration_reduction_percent",
+            "best_vibration_reduction_percent",
+            "worst_vibration_reduction_percent",
+            "Best, mean, and worst vibration reduction",
+            "Reduction vs No Control (%)",
+        ),
+        use_container_width=True,
+    )
+
+    st.download_button(
+        "Download robust evaluation cases (CSV)",
+        data=to_csv_bytes(robust_cases),
+        file_name="robust_evaluation_cases.csv",
+        mime="text/csv",
+        key="download_robust_cases",
+    )
+

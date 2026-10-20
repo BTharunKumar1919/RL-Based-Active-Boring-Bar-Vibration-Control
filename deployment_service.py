@@ -462,17 +462,19 @@ def run_robust_evaluation(
     for controller_name in ALLOWED_CONTROLLERS:
         subset = frame[frame["controller"] == controller_name].copy()
         reductions = subset["steady_rms_reduction_vs_no_control_percent"]
-        current_limit = PLANT.continuous_current_limit_a
+        current_limit = build_plant_config(plant_variations).continuous_current_limit_a
         summary_rows.append({
             "controller": controller_name,
             "cases": int(len(subset)),
             "mean_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].mean()),
             "median_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].median()),
+            "best_case_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].min()),
             "worst_case_steady_rms_vibration_um": float(subset["steady_rms_vibration_um"].max()),
             "mean_peak_vibration_um": float(subset["peak_vibration_um"].mean()),
             "mean_rms_control_current_a": float(subset["rms_control_current_a"].mean()),
             "mean_hard_saturation_percent": float(subset["hard_saturation_percent"].mean()),
             "mean_vibration_reduction_percent": float(reductions.mean()),
+            "best_vibration_reduction_percent": float(reductions.max()),
             "worst_vibration_reduction_percent": float(reductions.min()),
             "success_rate_percent": float(np.mean(reductions > 0.0) * 100.0),
             "composite_robust_score": _robust_score(

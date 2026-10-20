@@ -193,9 +193,9 @@ class ComparisonRequest(BaseModel):
 
 
 class RobustEvaluationRequest(BaseModel):
-    amplitudes_n: list[float] = Field(default_factory=lambda: list(ROBUST_AMPLITUDES_N), min_length=1, max_length=10)
-    frequencies_hz: list[float] = Field(default_factory=lambda: list(ROBUST_FREQUENCIES_HZ), min_length=1, max_length=20)
-    phases_rad: list[float] = Field(default_factory=lambda: list(ROBUST_PHASES_RAD), min_length=1, max_length=12)
+    amplitudes_n: list[float] = Field(default_factory=lambda: list(ROBUST_AMPLITUDES_N), min_length=1, max_length=25)
+    frequencies_hz: list[float] = Field(default_factory=lambda: list(ROBUST_FREQUENCIES_HZ), min_length=1, max_length=25)
+    phases_rad: list[float] = Field(default_factory=lambda: list(ROBUST_PHASES_RAD), min_length=1, max_length=25)
     duration_s: float = Field(default=ROBUST_DEFAULT_DURATION_S, gt=0.0, le=2.0)
     plant_variations: dict[str, Any] = Field(default_factory=dict)
     process_noise_std_n: float = Field(default=0.0, ge=0.0, le=MAX_PROCESS_NOISE_STD_N)
