@@ -265,6 +265,155 @@ except requests.RequestException as exc:
 
 
 # ---------------------------------------------------------------------
+# Advanced configurable experiment builder / policy registry
+# ---------------------------------------------------------------------
+
+st.divider()
+st.header("Configurable experiments and SAC policy registry")
+st.caption("Choose a trained policy independently from the plant and cutting-force configuration used for evaluation. Mismatched evaluations are allowed and flagged.")
+
+try:
+    preset_data = api_get("/plant-presets")
+    policy_data = api_get("/policies").get("policies", [])
+except requests.RequestException:
+    preset_data = {"presets": [{"id":"paper_nominal","label":"Paper nominal (baseline)"}]}
+    policy_data = []
+
+preset_options = {x["label"]: x["id"] for x in preset_data.get("presets", [])}
+with st.expander("1. Experiment configuration", expanded=True):
+    adv1, adv2, adv3 = st.columns(3)
+    with adv1:
+        adv_controller = st.selectbox("Controller", ["SAC", "PID", "No control"], key="adv_controller")
+        policy_labels = {f"{p.get('name',p.get('id'))} [{p.get('training_mode','unknown')}]" + (" — missing checkpoint" if not p.get("model_exists") else ""): p.get("id") for p in policy_data}
+        usable_policy_labels = [k for k,pid in policy_labels.items() if next((p.get("model_exists") for p in policy_data if p.get("id")==pid),False)]
+        selected_policy_label = st.selectbox("Trained SAC policy", usable_policy_labels or ["No registered policies yet"], key="adv_policy")
+        selected_policy_id = policy_labels.get(selected_policy_label) if usable_policy_labels else None
+        adv_preset_label = st.selectbox("Plant preset", list(preset_options.keys()), key="adv_preset")
+        adv_preset = preset_options[adv_preset_label]
+    with adv2:
+        force_kind = st.selectbox("Cutting-force model", ["sinusoidal", "multi_harmonic", "modulated", "mixed"], format_func=lambda x: {"sinusoidal":"Single harmonic","multi_harmonic":"Multiple harmonics","modulated":"Amplitude-modulated harmonic","mixed":"Harmonics + modulation"}[x], key="adv_force_kind")
+        force_amp = st.number_input("Fundamental amplitude (N)", 0.0, 10.0, 1.0, 0.1, key="adv_force_amp")
+        force_freq = st.number_input("Fundamental frequency (Hz)", 0.0, 1000.0, 174.0, 1.0, key="adv_force_freq")
+        force_phase = st.number_input("Fundamental phase (rad)", -6.28, 6.28, 0.0, 0.1, key="adv_force_phase")
+    with adv3:
+        adv_duration = st.number_input("Duration (s)", 0.01, 2.0, 0.2, 0.01, key="adv_duration")
+        adv_seed = st.number_input("Random seed", 0, 2147483647, 42, 1, key="adv_seed")
+        process_noise = st.number_input("Process noise std (N)", 0.0, 10.0, 0.0, 0.01, key="adv_process_noise")
+        sensor_noise_um = st.number_input("Sensor displacement noise std (µm)", 0.0, 100.0, 0.0, 0.1, key="adv_sensor_noise")
+        force_noise = st.number_input("Cutting-force noise std (N)", 0.0, 10.0, 0.0, 0.01, key="adv_force_noise")
+
+    harm1, harm2 = st.columns(2)
+    with harm1:
+        h2_order = st.number_input("Harmonic 2 order", 2, 20, 2, 1, key="adv_h2_order")
+        h2_amp = st.number_input("Harmonic 2 amplitude (N)", 0.0, 10.0, 0.25, 0.05, key="adv_h2_amp")
+        h2_phase = st.number_input("Harmonic 2 phase (rad)", -6.28, 6.28, 0.0, 0.1, key="adv_h2_phase")
+    with harm2:
+        h3_order = st.number_input("Harmonic 3 order", 2, 20, 3, 1, key="adv_h3_order")
+        h3_amp = st.number_input("Harmonic 3 amplitude (N)", 0.0, 10.0, 0.10, 0.05, key="adv_h3_amp")
+        h3_phase = st.number_input("Harmonic 3 phase (rad)", -6.28, 6.28, 0.0, 0.1, key="adv_h3_phase")
+    if force_kind in ("modulated", "mixed"):
+        mod1, mod2 = st.columns(2)
+        with mod1: mod_depth = st.slider("Modulation depth", 0.0, 1.0, 0.25, 0.05, key="adv_mod_depth")
+        with mod2: mod_freq = st.number_input("Modulation frequency (Hz)", 0.0, 500.0, 5.0, 0.5, key="adv_mod_freq")
+    else:
+        mod_depth, mod_freq = 0.0, 5.0
+
+    with st.expander("Per-mode plant parameter variations", expanded=False):
+        st.caption("Percentage offsets are applied to the selected preset. Frequency and damping offsets are relative to each mode's nominal values.")
+        variations = {}
+        for mode_i in range(1, 7):
+            st.markdown(f"**Current-driven mode {mode_i}**")
+            vc1, vc2, vc3 = st.columns(3)
+            variations[f"mode_{mode_i}"] = {
+                "frequency_pct": vc1.slider("Frequency (%)", -20, 20, 0, 1, key=f"adv_m{mode_i}_f"),
+                "damping_pct": vc2.slider("Damping (%)", -20, 20, 0, 1, key=f"adv_m{mode_i}_d"),
+                "gain_pct": vc3.slider("Input gain (%)", -20, 20, 0, 1, key=f"adv_m{mode_i}_g"),
+            }
+        st.markdown("**Cutting-force-driven mode**")
+        vf1, vf2, vf3 = st.columns(3)
+        variations["force_mode"] = {
+            "frequency_pct": vf1.slider("Frequency (%)", -20, 20, 0, 1, key="adv_fm_f"),
+            "damping_pct": vf2.slider("Damping (%)", -20, 20, 0, 1, key="adv_fm_d"),
+            "stiffness_pct": vf3.slider("Stiffness (%)", -20, 20, 0, 1, key="adv_fm_k"),
+        }
+
+    cutting_force_cfg = {"kind": force_kind, "amplitude_n": force_amp, "frequency_hz": force_freq,
+        "phase_rad": force_phase, "noise_std_n": force_noise,
+        "harmonics": [{"order": int(h2_order), "amplitude_n": h2_amp, "phase_rad": h2_phase},
+                      {"order": int(h3_order), "amplitude_n": h3_amp, "phase_rad": h3_phase}],
+        "modulation_depth": mod_depth, "modulation_frequency_hz": mod_freq}
+    advanced_payload = {"controller": adv_controller, "policy_id": selected_policy_id,
+        "plant_preset": adv_preset, "variations": variations, "cutting_force": cutting_force_cfg,
+        "noise": {"process_std_n": process_noise, "sensor_std_m": sensor_noise_um * 1e-6},
+        "duration_s": adv_duration, "seed": int(adv_seed)}
+    if st.button("Run configurable experiment", type="primary", key="run_advanced_experiment"):
+        try:
+            with st.spinner("Running configurable simulation..."):
+                adv_result = api_post("/experiment/simulate", advanced_payload)
+            st.session_state["advanced_result"] = adv_result
+        except requests.HTTPError as exc:
+            st.error(f"Experiment failed: {exc.response.text if exc.response is not None else exc}")
+        except requests.RequestException as exc:
+            st.error(f"Could not reach the API: {exc}")
+
+if "advanced_result" in st.session_state:
+    adv_result = st.session_state["advanced_result"]
+    if adv_result.get("warning"):
+        st.warning(adv_result["warning"])
+    st.subheader("Latest configurable experiment")
+    st.json({"controller": adv_result.get("controller"), "policy": adv_result.get("policy"),
+             "seed": adv_result.get("seed"), "metrics": adv_result.get("metrics"),
+             "plant_variations": adv_result.get("variations"), "noise": adv_result.get("noise")})
+    adv_df = pd.DataFrame(adv_result.get("timeseries", []))
+    if not adv_df.empty:
+        st.plotly_chart(px.line(adv_df, x="time_s", y="displacement_um", title="Configurable experiment: displacement (µm)"), use_container_width=True)
+        st.download_button("Download configurable experiment CSV", adv_df.to_csv(index=False).encode("utf-8"), file_name="configurable_experiment.csv", mime="text/csv")
+
+with st.expander("Train and manage SAC policies", expanded=False):
+    train_col1, train_col2, train_col3 = st.columns(3)
+    with train_col1:
+        training_mode = st.selectbox("Training strategy", ["individual", "generalized"], format_func=lambda x: "Individual configuration" if x=="individual" else "Generalized (randomized plant)", key="training_mode")
+        training_name = st.text_input("Policy name", value="", key="training_name")
+    with train_col2:
+        training_steps = st.number_input("Training timesteps", 1000, 5000000, 50000, 1000, key="training_steps")
+        training_seed = st.number_input("Training seed", 0, 2147483647, 42, 1, key="training_seed")
+    with train_col3:
+        training_jitter = st.slider("Generalized plant variation (%)", 0.0, 30.0, 10.0, 1.0, key="training_jitter")
+        st.caption("Training uses the selected force model and noise settings above.")
+    if st.button("Start SAC training job", key="start_training_job"):
+        try:
+            job = api_post("/training/jobs", {"name": training_name, "training_mode": training_mode,
+                "total_timesteps": int(training_steps), "seed": int(training_seed),
+                "plant_variation_pct": training_jitter, "plant_preset": adv_preset, "variations": variations,
+                "cutting_force": cutting_force_cfg,
+                "noise": {"process_std_n": process_noise, "sensor_std_m": sensor_noise_um*1e-6}})
+            st.session_state["training_job_id"] = job["id"]
+            st.success(f"Training job started: {job['id']}")
+        except requests.HTTPError as exc:
+            st.error(f"Could not start training: {exc.response.text if exc.response is not None else exc}")
+        except requests.RequestException as exc:
+            st.error(f"Could not reach the API: {exc}")
+    if st.session_state.get("training_job_id"):
+        job_id = st.session_state["training_job_id"]
+        try:
+            job = api_get(f"/training/jobs/{job_id}")
+            st.write(f"Job **{job['id']}** — status: **{job['status']}**")
+            st.progress(float(job.get("progress", 0.0)))
+            st.caption(f"{job.get('timesteps',0):,} / {job.get('total_timesteps',0):,} timesteps")
+            st.code("\n".join(job.get("logs", [])[-12:]), language="text")
+            if job["status"] in ("running", "queued"):
+                if st.button("Stop training (save partial checkpoint)", key="cancel_training_job"):
+                    api_post(f"/training/jobs/{job_id}/cancel", {})
+                    st.warning("Cancellation requested. Refresh status to confirm the partial checkpoint was saved.")
+            if job.get("error"): st.error(job["error"])
+            if st.button("Refresh training status / policy list", key="refresh_training_status"):
+                st.rerun()
+        except requests.RequestException as exc:
+            st.error(f"Could not retrieve training status: {exc}")
+
+st.divider()
+
+# ---------------------------------------------------------------------
 # Run simulations
 # ---------------------------------------------------------------------
 
