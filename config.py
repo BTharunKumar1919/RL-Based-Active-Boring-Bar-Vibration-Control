@@ -129,9 +129,9 @@ class TrainingConfig:
     # Reward
     # ---------------------------------------------------------
 
-    displacement_reward_weight: float = 1.0
+    displacement_reward_weight: float = 2.0
 
-    control_effort_reward_weight: float = 0.10
+    control_effort_reward_weight: float = 0.02
 
     action_change_reward_weight: float = 0.05
 

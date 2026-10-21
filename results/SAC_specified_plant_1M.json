@@ -1,0 +1,99 @@
+{
+  "created_utc": "2026-10-21T07:13:19.953937+00:00",
+  "model_path": "results\\SAC_specified_plant_1M.zip",
+  "algorithm": "SAC",
+  "environment": "VibrationEnv",
+  "plant_variations": {
+    "current_modes": [
+      {
+        "natural_frequency_percent": 0.0,
+        "damping_ratio_percent": 0.0,
+        "k_yI_percent": 0.0
+      },
+      {
+        "natural_frequency_percent": 0.0,
+        "damping_ratio_percent": 0.0,
+        "k_yI_percent": 0.0
+      },
+      {
+        "natural_frequency_percent": 0.0,
+        "damping_ratio_percent": 0.0,
+        "k_yI_percent": 0.0
+      },
+      {
+        "natural_frequency_percent": 0.0,
+        "damping_ratio_percent": 0.0,
+        "k_yI_percent": 0.0
+      },
+      {
+        "natural_frequency_percent": 0.0,
+        "damping_ratio_percent": 0.0,
+        "k_yI_percent": 0.0
+      },
+      {
+        "natural_frequency_percent": 0.0,
+        "damping_ratio_percent": 0.0,
+        "k_yI_percent": 0.0
+      }
+    ],
+    "force_mode": {
+      "natural_frequency_percent": 0.0,
+      "damping_ratio_percent": 0.0,
+      "stiffness_percent": 0.0
+    },
+    "actuator": {
+      "bandwidth_percent": 0.0,
+      "slew_rate_percent": 0.0
+    }
+  },
+  "disturbance": {
+    "amplitude_range_n": [
+      1.0,
+      1.0
+    ],
+    "frequency_range_hz": [
+      174.0,
+      174.0
+    ],
+    "phase_range_rad": [
+      0.0,
+      0.0
+    ],
+    "harmonic_amplitudes_ratio": [],
+    "harmonic_phase_rad": [],
+    "harmonic_randomization": [],
+    "harmonic_count_randomization": {},
+    "cutting_force_noise_std_n": 0.0,
+    "cutting_force_noise_seed": 42
+  },
+  "process_noise_std_n": 0.0,
+  "process_noise_seed": 42,
+  "sac": {
+    "total_timesteps": 1000000,
+    "seed": 42,
+    "episode_duration_s": 0.2,
+    "action_repeat": 5,
+    "observation_history_length": 8,
+    "learning_rate": 0.0003,
+    "buffer_size": 500000,
+    "learning_starts": 5000,
+    "batch_size": 256,
+    "tau": 0.005,
+    "gamma": 0.99,
+    "train_freq": 1,
+    "gradient_steps": 1
+  },
+  "training_mode": "specified",
+  "generalized_randomization": {},
+  "requested": {
+    "total_timesteps": 1000000,
+    "phase_range_rad": [
+      0.0,
+      0.0
+    ],
+    "process_noise_std_n": 0.0,
+    "process_noise_seed": 42,
+    "training_mode": "specified",
+    "generalized_randomization": {}
+  }
+}

@@ -2,102 +2,216 @@
 
 A modular Python simulation project comparing **No Control**, a **PID controller**, and a **Soft Actor-Critic (SAC)** reinforcement-learning controller for active vibration suppression in a simplified rotary boring-bar model.
 
-The project includes a simulation environment, reinforcement-learning training and evaluation scripts, a FastAPI backend, and an interactive Streamlit dashboard.
+The project includes a multi-mode plant and actuator model, disturbance/noise modelling, SAC training and evaluation, configurable robust evaluation, a FastAPI backend, and an interactive Streamlit dashboard.
 
-> **Scope:** This is an educational simulation using an assumed single-mode oscillator. It is not an experimentally identified boring-bar model, a validated digital model, or a demonstration of chatter suppression on physical machinery.
+> **Scope:** This is an educational simulation framework using assumed plant, actuator, and disturbance parameters. It is not an experimentally identified boring-bar model, a validated digital twin, or a demonstration of chatter suppression on physical machinery.
 
 ## Features
 
 - **Three-controller comparison:** No Control, PID, and SAC.
-- **Reinforcement learning:** Train and evaluate a SAC policy using Stable-Baselines3.
-- **Robustness evaluation:** Compare controllers across a deterministic grid of disturbance amplitudes, frequencies, and phases.
-- **Interactive dashboard:** Explore displacement, velocity, disturbance force, control force, vibration metrics, and actuator effort.
-- **REST API:** Run individual simulations and compare controllers using FastAPI.
-- **Exportable results:** Download simulation time series and controller metrics as CSV files.
-- **Reproducible configuration:** Centralized plant, training, disturbance, and evaluation settings.
+- **Multi-mode plant:** Six current-driven structural modes and one force-driven mode.
+- **Actuator model:** Current-commanded control with actuator bandwidth, current slew-rate, and current saturation limits.
+- **Reinforcement learning:** Train and evaluate SAC using Stable-Baselines3.
+- **Specified SAC training:** Train a policy for a fixed operating condition.
+- **Generalized SAC training:** Randomize selected operating and plant parameters independently across episodes.
+- **Harmonic disturbance model:** Fundamental cutting force plus optional 2f–6f harmonics with configurable amplitudes and phases.
+- **Noise modelling:** Separate cutting-force noise and plant process noise.
+- **Configurable plant variation:** Perturb physical plant and actuator parameters within bounded percentage ranges.
+- **Robustness evaluation:** Compare controllers over configurable amplitude, frequency, and phase grids.
+- **Interactive dashboard:** Configure plant, disturbance, PID, SAC training, controller selection, simulations, and robust evaluation from Streamlit.
+- **Model library:** Automatically detect saved SAC models in `results/`, select an active model, or use a model from another directory.
+- **Model metadata:** Save a JSON configuration alongside each trained SAC model.
+- **REST API:** Run simulations and controller comparisons through FastAPI.
+- **Exportable results:** Download time-series data, controller metrics, and robust-evaluation results as CSV files.
+- **Reproducible configuration:** Centralized plant, disturbance, training, reward, and evaluation settings.
 
 ## Results at a glance
 
-The included `results/robust_evaluation_summary.csv` reports the current 84-condition evaluation.
+The project is designed to evaluate vibration suppression together with actuator effort rather than relying on vibration reduction alone.
 
-| Controller | Mean steady-state RMS vibration | Mean reduction vs. No Control | Conditions improved |
-|---|---:|---:|---:|
-| No Control | 4.962 µm | 0.00% | Baseline |
-| PID | 3.761 µm | 4.64% | 42.9% (36/84) |
-| SAC | 3.410 µm | 14.10% | 100% (84/84) |
+The robust evaluator reports, for each controller:
 
-For the 24 conditions with disturbance frequencies outside the SAC training range (205 and 215 Hz), the mean reduction was **6.82% for SAC** and **−6.55% for PID**. Negative reduction means vibration was higher than the No Control baseline.
+- Mean, median, best-case, and worst-case steady-state RMS vibration.
+- Mean peak vibration.
+- Mean RMS control current.
+- Mean actuator saturation fraction.
+- Mean, best-case, and worst-case vibration reduction relative to No Control.
+- Fraction of tested conditions improved relative to No Control.
+- A composite robust score that combines vibration reduction and current usage.
 
-These results describe the included simulation and evaluation grid. They do not establish real-machine performance. The results use one saved SAC policy and one deterministic test grid; multi-seed and physical validation remain future work. Results can change if the model, configuration, controller, or training process changes.
+The repository may contain saved result files from a particular training run. These results are **configuration- and model-specific** and should be regenerated after changing the plant, controller, reward function, training distribution, or SAC model.
+
+No numerical result in this README should be interpreted as a fixed project-wide benchmark. The purpose of the framework is to make controller comparisons reproducible for a clearly specified simulation configuration.
 
 ## System architecture
 
 ```text
-                    Simulation configuration
-                              |
-                              v
-                   Single-mode plant model
-                              |
-                 Harmonic disturbance input
+                         Configuration
                               |
              +----------------+----------------+
-             |                |                |
-             v                v                v
-         No Control          PID              SAC
-             |                |                |
+             |                                 |
+             v                                 v
+      Plant / actuator                  Cutting-force model
+             |                         + harmonics + noise
              +----------------+----------------+
+                              |
+                +-------------+-------------+
+                |             |             |
+                v             v             v
+            No Control       PID           SAC
+                |             |             |
+                +-------------+-------------+
                               |
                               v
                     Simulation time series
                               |
                               v
-                   Performance calculations
+                    Performance metrics
                               |
-                    +---------+---------+
-                    |                   |
-                    v                   v
-                FastAPI API       Streamlit UI
-                    |                   |
-                    +---------+---------+
+                 +------------+------------+
+                 |                         |
+                 v                         v
+          Robust evaluation          FastAPI service
+                 |                         |
+                 +------------+------------+
                               |
-                   Plots, metrics and CSVs
+                              v
+                       Streamlit dashboard
+                              |
+                     Plots, metrics, CSVs
 ```
 
-The dashboard sends requests to the API. The API calls the shared simulation service, which uses the existing plant and controller implementation. SAC inference loads a saved model; it does not train the policy during dashboard requests.
+The dashboard communicates with the FastAPI backend. The backend uses the shared simulation/deployment service so that normal comparisons and robust evaluation use the same controller and plant implementation. SAC inference loads a saved policy; training is performed explicitly through the SAC training controls rather than during normal simulation requests.
 
-## Model and assumptions
+## Plant and actuator model
 
-The plant is a single-degree-of-freedom mass–spring–damper surrogate:
+The current plant is a seven-mode model:
+
+- **Six current-driven modes:** control current directly excites the modal dynamics through a mode-specific `k_yI` coefficient.
+- **One force-driven mode:** the cutting disturbance enters through a dedicated force-driven structural mode.
+
+Nominal current-driven modes:
+
+| Mode | Natural frequency | Damping ratio | `k_yI` |
+|---|---:|---:|---:|
+| 1 | 51 Hz | 0.03 | -2.0e6 |
+| 2 | 67 Hz | 0.08 | -4.0e5 |
+| 3 | 98 Hz | 0.03 | -9.0e6 |
+| 4 | 138 Hz | 0.08 | -8.0e5 |
+| 5 | 273 Hz | 0.05 | +4.0e6 |
+| 6 | 450 Hz | 0.05 | -9.5e5 |
+
+Nominal force-driven mode:
+
+- Natural frequency: **188 Hz**
+- Damping ratio: **0.034**
+- Stiffness: **2.6e6 N/m**
+
+The plant integrates at **0.0001 s (10 kHz)**.
+
+The control interface is current-based:
+
+- Continuous current limit: **±5 A**
+- Peak current limit: **±15 A**
+- Current-loop bandwidth: **8000 Hz**
+- Effective actuator bandwidth: **800 Hz**
+- Current slew-rate limit: **10,000 A/s**
+
+The SAC action is normalized to `[-1, 1]` and mapped to the ±5 A continuous-current command range. The actuator dynamics and slew-rate limit are applied before the current enters the modal plant.
+
+The model parameters are assumptions and should not be interpreted as experimentally identified values.
+
+## Disturbance model
+
+The disturbance model consists of a sinusoidal fundamental cutting force:
 
 $$
-m\ddot{q}+c\dot{q}+kq
-=F_{\text{disturbance}}+F_{\text{control}}
+F_1(t)=A\sin(2\pi f t+\phi)
 $$
 
-Current assumptions:
+Optional Fourier harmonics can be added at 2f through 6f. Harmonic amplitudes are specified as fractions of the fundamental amplitude, with independent harmonic phases.
 
-- Nominal natural frequency: 174 Hz.
-- Damping ratio: 0.012.
-- Modal mass: 1 kg, used as a normalization assumption rather than a measured modal mass.
-- Simulation time step: 0.0001 s, corresponding to a 10 kHz simulation update rate.
-- Maximum generalized control force: ±2 N, an assumed limit rather than a measured actuator rating.
-- Disturbance: sinusoidal force, not a regenerative chatter or complete cutting-process model.
-- Integration: semi-implicit Euler.
-- The simulated state coordinate is modal displacement. A calibrated mode-shape factor is needed to infer physical tool-tip displacement.
+The dashboard can also add **cutting-force noise**, which is separate from plant process noise.
 
-The 174 Hz natural frequency should be treated as a working assumption until its source and applicability to the target boring bar are verified.
+### Noise models
 
-### Current noise and uncertainty limitations
+Two different noise sources are implemented:
 
-The current baseline simulation does **not** implement:
+- **Cutting-force noise:** additive force noise applied to the cutting-force disturbance.
+- **Process noise:** additive force noise applied to the force-driven plant mode.
 
-- Sensor measurement noise.
-- Randomized plant parameters within each simulation run.
-- A Kalman filter or other state estimator.
-- Randomly varying cutting-force dynamics.
-- Real actuator bandwidth, delay, slew-rate limits, or force-current calibration.
+The two noise sources have independent configuration and seeds. They should not be confused with sensor noise: the current implementation does **not** simulate noisy measurements or a state estimator.
 
-The dashboard currently plots the deterministic simulated response for the selected operating condition. Noise and uncertainty modelling are planned extensions, not existing capabilities.
+## SAC observation and control timing
+
+The SAC policy does not operate directly on a single instantaneous state. Its observation consists of **eight consecutive observations**.
+
+Each observation contains:
+
+```text
+[normalized displacement,
+ normalized velocity,
+ normalized actual actuator current]
+```
+
+The eight observations provide **4 ms of history** because the SAC command is updated every five physical plant steps.
+
+The timing is:
+
+```text
+Plant integration:       0.1 ms
+SAC action interval:     5 plant steps = 0.5 ms
+Observation history:     8 SAC observations = 4 ms
+```
+
+The action is held for the configured action-repeat interval while the physical plant continues integrating at 10 kHz.
+
+## SAC training modes
+
+The dashboard supports two main training modes.
+
+### Specified-condition training
+
+The policy is trained using a fixed operating condition. The selected amplitude, frequency, phase, harmonics, noise levels, and plant configuration remain fixed during training unless explicitly changed by the user.
+
+This mode is useful for studying a controller specialized to a particular operating condition.
+
+### Generalized / randomized training
+
+Selected parameters can instead be randomized independently between episodes. Current continuous randomization options include:
+
+- Disturbance amplitude.
+- Disturbance frequency.
+- Fundamental phase.
+- Cutting-force noise level.
+- Process-noise level.
+- Plant and actuator parameters.
+
+The user can choose which parameters participate in randomization and specify their ranges. Generalized training samples operating conditions rather than evaluating every Cartesian combination on a grid.
+
+Harmonic randomization is also supported by the training configuration. Harmonic count can be randomized explicitly when enabled; otherwise the selected harmonic structure remains fixed.
+
+### Reproducibility
+
+Training uses an explicit seed. The saved model is accompanied by a JSON metadata file containing the training mode, plant variations, disturbance configuration, randomization settings, SAC hyperparameters, timing settings, and other requested training parameters.
+
+## SAC reward
+
+The training reward combines vibration, control effort, and action-change penalties:
+
+$$
+R = -w_x E_x - w_u E_u - w_{\Delta u}E_{\Delta u}
+$$
+
+where the weights are configured in `TrainingConfig` in `config.py`.
+
+Current defaults are:
+
+- Displacement/vibration weight: **1.0**
+- Control-effort weight: **0.10**
+- Action-change weight: **0.05**
+
+These weights are not universal optimum values. Changing them changes the trade-off the SAC policy learns between vibration suppression, current usage, and command smoothness. Any model retrained after changing the reward weights should be treated as a different experiment.
 
 ## Repository layout
 
@@ -118,29 +232,30 @@ The dashboard currently plots the deterministic simulated response for the selec
 ├── requirements.txt
 ├── README.md
 └── results/
-    ├── sac_vibration_model.zip
-    ├── robust_evaluation_by_condition.csv
-    ├── robust_evaluation_summary.csv
-    └── figures and other evaluation outputs
+    ├── *.zip                         Saved SAC models
+    ├── *.json                        SAC training metadata
+    ├── robust_evaluation_*.csv       Robust evaluation data
+    ├── robust_evaluation_*.png       Robust evaluation plots
+    └── other figures and CSV outputs
 ```
 
-`results/` may contain additional CSV files, plots, and saved model files depending on which scripts have been run.
+`results/` may contain additional saved models, metadata, CSV files, plots, and TensorBoard logs depending on which training and evaluation workflows have been run.
 
 ### Main modules
 
 | File | Purpose |
 |---|---|
-| `config.py` | Plant, disturbance, training, and evaluation configuration |
-| `models.py` | Single-mode plant and sinusoidal disturbance |
-| `controllers.py` | No Control and PID controllers |
-| `env.py` | Gymnasium environment used for SAC training |
-| `sac_training.py` | SAC model construction and training |
-| `experiments.py` | Controller simulation, metrics, and standard experiments |
-| `run_baseline.py` | Training and standard comparison entry point |
-| `tune_pid.py` | PID gain grid search |
-| `robust_evaluation.py` | Deterministic 84-condition evaluation |
-| `deployment_service.py` | Shared simulation service for API requests |
-| `api.py` | FastAPI endpoints |
+| `config.py` | Central plant, disturbance, training, reward, and evaluation configuration |
+| `models.py` | Seven-mode plant, actuator dynamics, disturbance model, noise, and plant-variation construction |
+| `controllers.py` | No Control and PID controller implementations |
+| `env.py` | Gymnasium environment used for SAC training, including observation history and episode randomization |
+| `sac_training.py` | SAC construction, specified/generalized training, saving, and metadata generation |
+| `experiments.py` | Controller simulation, time-series generation, and performance metrics |
+| `run_baseline.py` | Standard training/comparison entry point |
+| `tune_pid.py` | PID gain tuning utility |
+| `robust_evaluation.py` | Standalone robust evaluation over the default evaluation grid |
+| `deployment_service.py` | Shared simulation and robust-evaluation service used by the API/dashboard |
+| `api.py` | FastAPI endpoints for simulation, comparison, training, and model management |
 | `app.py` | Streamlit interactive dashboard |
 | `requirements.txt` | Python dependencies |
 
@@ -148,8 +263,9 @@ The dashboard currently plots the deterministic simulated response for the selec
 
 - Python 3.10 or 3.11 recommended.
 - Dependencies listed in `requirements.txt`.
-- The saved SAC model file is required for SAC inference.
-- The API and dashboard run locally by default.
+- Stable-Baselines3 and Gymnasium are required for SAC training/inference.
+- The FastAPI and Streamlit components are required for the interactive application.
+- A saved SAC `.zip` model is required when running SAC inference.
 
 ## Installation
 
@@ -182,7 +298,7 @@ python3 -m venv .venv
 
 ## Run the project
 
-### 1. Train the SAC policy and run standard experiments
+### 1. Train SAC from the command line
 
 A short smoke test:
 
@@ -193,35 +309,39 @@ A short smoke test:
 A longer training run:
 
 ```bat
-.venv\Scripts\python.exe run_baseline.py --timesteps 100000 --seed 42
+.venv\Scripts\python.exe run_baseline.py --timesteps 300000 --seed 42
 ```
 
-If `--timesteps` is omitted, `run_baseline.py` defaults to 300,000 timesteps. Training saves the policy to `results/sac_vibration_model.zip` and runs the standard experiments.
+The dashboard provides more extensive training controls, including specified/generalized training, plant variation, disturbance randomization, harmonics, noise, SAC hyperparameters, and model naming.
 
-**Warning:** Training can overwrite the existing model and standard result files. Back up any results you want to preserve before retraining.
+Training saves the policy as a `.zip` file and writes a matching `.json` metadata file when using the configurable SAC training workflow.
 
-### 2. Evaluate the saved policy over 84 conditions
+> **Warning:** Training can overwrite existing result files or model names. Use descriptive model names and preserve any model/result files that are needed for comparison.
+
+### 2. Evaluate the saved policy over the default robust grid
 
 ```bat
 .venv\Scripts\python.exe robust_evaluation.py
 ```
 
-The evaluation compares No Control, PID, and SAC across:
+The default standalone evaluation uses:
 
-- Disturbance amplitudes: 0.5, 1.0, and 1.5 N.
-- Disturbance frequencies: 150, 160, 174, 185, 200, 205, and 215 Hz.
-- Disturbance phases: 0, π/2, π, and 3π/2 radians.
+- Disturbance amplitudes: **0.5, 1.0, 1.5 N**.
+- Disturbance frequencies: **150, 160, 174, 185, 200, 205, 215 Hz**.
+- Disturbance phases: **0, π/2, π, 3π/2 rad**.
 
-This gives 3 × 7 × 4 = 84 conditions per controller.
+This gives **3 × 7 × 4 = 84 conditions per controller**.
 
-Each condition runs for 0.2 seconds. Steady-state RMS vibration is calculated over the final 80% of the simulated record. Frequencies from 150–200 Hz are within the configured SAC training range; 205 and 215 Hz are outside it.
+Each condition runs for 0.2 s, with the final 80% used for steady-state metrics.
 
-Outputs include:
+The Streamlit dashboard additionally allows the amplitude, frequency, and phase ranges and their number of divisions to be changed for custom robust evaluations.
+
+Typical outputs include:
 
 - `results/robust_evaluation_by_condition.csv`
 - `results/robust_evaluation_summary.csv`
-- `results/robust_evaluation_rms.png`
-- `results/robust_evaluation_reduction.png`
+- Robust RMS and vibration-reduction plots
+- Additional case-level and summary outputs depending on the selected configuration
 
 ### 3. Start the FastAPI backend
 
@@ -239,17 +359,7 @@ Interactive API documentation:
 
 `http://127.0.0.1:8000/docs`
 
-Available endpoints:
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/` | API information |
-| `GET` | `/health` | Service and SAC model status |
-| `GET` | `/model` | Saved-model availability |
-| `POST` | `/simulate` | Simulate one controller |
-| `POST` | `/compare` | Compare all three controllers |
-
-The API validates request parameters and returns simulation metrics and time-series data. It is intended for local educational use and is not a safety-certified industrial control API.
+The API provides endpoints for service health, model information, simulation, controller comparison, SAC training, and model management. Exact endpoint availability should be checked against the current `api.py` because the application interface evolves with the project.
 
 ### 4. Start the Streamlit dashboard
 
@@ -263,89 +373,131 @@ Streamlit prints a local URL in the terminal, usually:
 
 `http://localhost:8501`
 
-The dashboard allows you to:
+The dashboard supports:
 
-- Set disturbance amplitude, frequency, phase, and duration.
-- Run No Control, PID, and SAC under the same selected disturbance condition.
-- Compare displacement and velocity time histories.
-- Inspect disturbance force and controller force.
-- Compare steady-state RMS, overall RMS, peak displacement, RMS force, peak force, and actuator saturation.
-- See percentage steady-state RMS reduction relative to No Control.
-- Identify whether the selected frequency lies inside or outside the SAC training range.
-- Download individual controller traces, all traces, and comparison metrics as CSV files.
+- Plant and actuator parameter variation within bounded percentages.
+- Process-noise configuration.
+- Fundamental cutting-force amplitude, frequency, and phase.
+- 2f–6f harmonics.
+- Cutting-force noise.
+- PID gain and integral-limit controls.
+- SAC specified-condition and generalized training.
+- SAC hyperparameter controls.
+- Training-model naming and metadata saving.
+- Automatic discovery of SAC models in `results/`.
+- Selection of a saved model or use of a model from another directory.
+- A single active SAC model used by subsequent simulations/evaluations.
+- Normal controller comparison.
+- Configurable robust evaluation ranges and plots.
+- Downloadable simulation and evaluation CSV files.
 
-The dashboard communicates with the API at `http://127.0.0.1:8000` by default. The API URL can be changed in the dashboard sidebar.
+The active SAC model is displayed in the dashboard together with its resolved file path so that the exact model used for inference can be verified.
 
-### 5. Tune PID gains (optional)
+## Model selection
 
-```bat
-.venv\Scripts\python.exe tune_pid.py
-```
+The dashboard treats one SAC model as the authoritative active model for inference.
 
-This runs the configured grid search and writes `results/pid_tuning_results.csv`. It overwrites that file if it already exists.
+Models saved in the project's `results/` directory are automatically discovered and presented by model name rather than by long file path. A refresh operation can be used after adding new model files.
 
-The robust evaluation uses fixed PID gains (`Kp = 50000`, `Ki = 0`, `Kd = 20`); PID is not retuned separately for each of the 84 evaluation conditions.
+For a model stored elsewhere, the dashboard provides an external-model selection option. The active model path is displayed separately so the exact file used by the simulation can be verified.
 
-### 6. Run syntax checks
+## PID control
 
-```bat
-.venv\Scripts\python.exe -m py_compile config.py models.py controllers.py env.py sac_training.py experiments.py run_baseline.py tune_pid.py robust_evaluation.py deployment_service.py api.py app.py
-```
+The dashboard exposes direct PID parameters:
+
+- `Kp`
+- `Ki`
+- `Kd`
+- Integral error limit
+
+PID gains are applied consistently to normal comparisons and robust evaluation. The PID controller is a benchmark controller; its performance depends on the selected gains and should not be treated as an automatically optimal baseline unless a separate tuning procedure has been performed.
 
 ## Interpreting the metrics
 
+The simulation reports vibration and actuator-effort metrics using the actual actuator current where applicable.
+
 - **Steady-state RMS vibration:** RMS displacement over the configured steady-state portion of the response.
-- **Overall RMS vibration:** RMS over the full simulated response.
+- **Overall RMS vibration:** RMS displacement over the full simulated response.
 - **Peak vibration:** Maximum absolute displacement.
-- **RMS control force:** Root-mean-square generalized force commanded by the controller.
-- **Peak control force:** Maximum absolute generalized control force.
-- **Actuator saturation fraction:** Fraction of samples at the actuator force limit.
-- **RMS reduction:** Percentage reduction relative to the matched No Control condition.
+- **RMS control current:** Root-mean-square actual actuator current.
+- **Peak control current:** Maximum absolute actual actuator current.
+- **Near-saturation fraction:** Fraction of samples close to the continuous current limit.
+- **Hard-saturation fraction:** Fraction of samples at or effectively at the continuous current limit.
+- **Vibration reduction:** Percentage reduction relative to the matched No Control condition.
 
-\[
-\text{RMS reduction}(\%) =
+$$
+\text{Vibration reduction}(\%) =
 100\left(1-\frac{\mathrm{RMS}_{\mathrm{controller}}}
-{\mathrm{RMS}_{\mathrm{no\ control}}}\right)
-\]
+{\mathrm{RMS}_{\mathrm{No\ Control}}}\right)
+$$
 
-Positive values indicate lower RMS vibration than No Control; negative values indicate worse performance.
+Positive values indicate lower vibration than No Control. Negative values indicate higher vibration than the No Control baseline.
 
-A lower vibration metric does not automatically imply a better practical controller. Control effort, saturation, robustness, and the validity of the plant model must also be considered.
+A lower vibration metric does not automatically imply a better practical controller. Control effort, saturation, robustness, model validity, and reproducibility must also be considered.
+
+## Robust evaluation
+
+The robust evaluator runs the same disturbance condition for each controller so that comparisons use matched operating conditions and noise realizations where noise is enabled.
+
+The dashboard can construct a custom Cartesian evaluation grid from:
+
+- Amplitude minimum/maximum and number of divisions.
+- Frequency minimum/maximum and number of divisions.
+- Phase minimum/maximum and number of divisions.
+- Duration per condition.
+
+If `N` divisions are selected, the range contains `N + 1` equally spaced values including both endpoints.
+
+The dashboard limits the total number of conditions to prevent accidentally launching an excessively large evaluation.
+
+The robust plots include amplitude/frequency heatmaps, frequency trends, and best/mean/worst-case summaries. Heatmaps aggregate across phase when multiple phase values are present.
 
 ## Limitations and interpretation
 
-- A frequency outside the training range is not equivalent to validation on a different physical machine.
-- The 84 conditions form a deterministic grid, not 84 independent physical experiments.
+- The model parameters are assumed rather than experimentally identified.
+- The seven-mode model is a simplified representation and is not a validated structural model of a particular boring bar.
+- The disturbance model is harmonic forcing; it is not a full regenerative chatter or cutting-process model.
+- Sensor measurement noise is not currently modelled.
+- A Kalman filter or other state estimator is not currently implemented.
+- Process and cutting-force noise are simulation disturbances, not measured machine noise.
+- The actuator is an assumed current-driven model. Real actuator force-current calibration, electrical dynamics, delays, and hardware-specific limits require experimental identification.
+- Robust evaluation uses deterministic test grids unless stochastic noise is explicitly enabled.
+- A generalized SAC policy trained over parameter ranges is not automatically guaranteed to generalize outside those ranges.
+- A frequency outside the SAC training range is not equivalent to validation on a different physical machine.
+- A single training seed is insufficient to establish statistical reproducibility.
 - The reported improved-condition percentage is not a statistical significance test.
-- A single training seed is insufficient to establish reproducibility.
-- The modular scripts use simulated displacement and velocity states; they do not include a Kalman estimator or noisy sensor model.
-- The actuator is an ideal generalized force source. Bandwidth, delay, slew rate, and force-current calibration are not modelled.
-- The dashboard shows simulation results only. It does not connect to physical sensors, actuators, or a live boring-bar machine.
-- No hardware or real machining tests are included.
+- Simulation performance does not establish physical-machine performance.
+- The dashboard does not connect to physical sensors, actuators, or a live boring-bar machine.
 
 ## Future work
 
-1. Verify model parameters using measured modal or frequency-response data from the target boring bar.
-2. Add sensor noise and randomized plant parameters, with repeatable random seeds.
-3. Train and evaluate SAC under realistic observation noise if the intended deployment includes noisy sensors.
-4. Add a regenerative chatter model and cutting-process dynamics.
-5. Model actuator bandwidth, delays, limits, and force-current calibration.
-6. Compare PID and SAC under matched tuning and information budgets.
-7. Repeat training across multiple random seeds and report uncertainty in evaluation results.
-8. Validate the simulation against experimental measurements before making physical performance claims.
+1. Verify plant parameters using measured modal or frequency-response data from the target boring bar.
+2. Validate the seven-mode model against experimental measurements.
+3. Add realistic sensor noise and observation/estimation modelling.
+4. Develop a regenerative chatter and cutting-process model.
+5. Identify actuator bandwidth, delay, slew-rate, current-force calibration, and saturation from hardware data.
+6. Improve PID tuning and compare PID and SAC under matched tuning and information budgets.
+7. Study SAC reward-weight selection and the vibration-versus-control-effort trade-off systematically.
+8. Train and evaluate SAC across multiple random seeds and report uncertainty.
+9. Study generalized training distributions and out-of-distribution operating conditions.
+10. Validate simulation predictions with controlled experimental machining tests before making physical performance claims.
 
 ## Reproducibility
 
-The saved model, source files, configuration, and result files represent a particular project snapshot. To reproduce the included robust-evaluation results, use the saved `results/sac_vibration_model.zip` with the matching source and configuration files:
+A trained SAC model should be kept together with its matching metadata JSON and the source/configuration snapshot used to create it.
 
-```bat
-.venv\Scripts\python.exe robust_evaluation.py
-```
+For a saved robust-evaluation result, preserve:
 
-Retraining the model may change results. Keep a copy of the model and associated CSV outputs if you need to preserve a specific experiment.
+- The SAC `.zip` model.
+- The corresponding SAC `.json` metadata.
+- `config.py` and relevant source files.
+- Robust-evaluation CSV outputs.
+- Any custom plant/disturbance configuration used for the experiment.
+
+Retraining a SAC model can change its behaviour even with the same nominal configuration. Different seeds, training distributions, reward weights, and hyperparameters represent different experiments.
 
 ## Contributing
 
-Contributions are welcome. Keep changes relevant to the project, test them before submission, document new dependencies and modelling assumptions, and update evaluation results when changing controller behaviour or training configurations.
+Contributions are welcome. Keep changes relevant to the project, test them before submission, document new dependencies and modelling assumptions, and update evaluation results when changing plant, controller, or training behaviour.
 
 Do not present simulation results as experimental validation on physical machinery.
