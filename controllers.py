@@ -32,10 +32,20 @@ class PIDController:
     integral_error: float = 0.0
 
     def __post_init__(self):
-        if self.kp < 0 or self.ki < 0 or self.kd < 0:
-            raise ValueError("PID gains must be non-negative.")
-        if self.integral_limit_m_s <= 0:
-            raise ValueError("Integral limit must be positive.")
+        # Signed gains are permitted for controller experiments. A negative
+        # gain reverses that term's contribution to the control current.
+        for name in ("kp", "ki", "kd"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+                raise ValueError(f"PID {name} must be a finite number.")
+
+        if (
+            isinstance(self.integral_limit_m_s, bool)
+            or not isinstance(self.integral_limit_m_s, (int, float))
+            or not np.isfinite(self.integral_limit_m_s)
+            or self.integral_limit_m_s <= 0
+        ):
+            raise ValueError("Integral limit must be a finite positive number.")
 
     def reset(self):
         self.integral_error = 0.0

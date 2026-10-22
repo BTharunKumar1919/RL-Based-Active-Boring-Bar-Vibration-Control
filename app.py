@@ -616,7 +616,7 @@ with st.sidebar:
     duration_s = st.slider(
         "Simulation duration (s)",
         min_value=0.02,
-        max_value=0.5,
+        max_value=5.0,
         value=0.2,
         step=0.02,
     )
@@ -626,23 +626,23 @@ with st.sidebar:
 
         pid_kp = st.number_input(
             "Kp (A/m)",
-            min_value=0.0,
+            min_value=-1.0e6,
             max_value=1.0e6,
             value=180000.0,
-            step=5000.0,
+            step=500.0,
             format="%.1f",
         )
         pid_ki = st.number_input(
             "Ki (A/(m·s))",
-            min_value=0.0,
+            min_value=-1.0e9,
             max_value=1.0e9,
             value=0.0,
-            step=10000.0,
+            step=1000.0,
             format="%.3g",
         )
         pid_kd = st.number_input(
             "Kd (A/(m/s))",
-            min_value=0.0,
+            min_value=-1.0e6,
             max_value=1.0e6,
             value=0.0,
             step=100.0,
@@ -1175,7 +1175,7 @@ with st.expander("SAC training configuration", expanded=True):
         train_process_seed = 42
         train_cutting_seed = 42
 
-    st.markdown("**Cutting-force harmonics — fixed during Step 6A**")
+    st.markdown("**Cutting-force harmonics**")
     hcols = st.columns(5)
     train_harmonic_ratios = []
     train_harmonic_phases = []
@@ -1207,7 +1207,7 @@ with st.expander("SAC training configuration", expanded=True):
             "Seed", min_value=0, max_value=2_147_483_647, value=42, step=1
         )
         train_episode_duration = st.number_input(
-            "Episode duration (s)", min_value=0.01, max_value=2.0,
+            "Episode duration (s)", min_value=0.01, max_value=5.0,
             value=0.2, step=0.01, format="%.3f"
         )
     with t2:

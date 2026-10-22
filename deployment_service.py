@@ -143,15 +143,26 @@ def run_simulation(
             raise ValueError(f"Harmonic {index} phase must be finite.")
 
     pid_gains = {} if pid_gains is None else dict(pid_gains)
-    for key in ("kp", "ki", "kd", "integral_limit_m_s"):
+
+    # PID gains may be signed so users can test reversed feedback terms.
+    # The integral clamp itself must remain positive.
+    for key in ("kp", "ki", "kd"):
         value = pid_gains.get(key, None)
         if value is not None and (
             isinstance(value, bool)
             or not isinstance(value, (int, float))
             or not np.isfinite(value)
-            or value < 0
         ):
-            raise ValueError(f"PID {key} must be a finite non-negative number.")
+            raise ValueError(f"PID {key} must be a finite number.")
+
+    value = pid_gains.get("integral_limit_m_s", None)
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not np.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError("PID integral_limit_m_s must be a finite positive number.")
 
     plant_config = build_plant_config(
         plant_variations,
