@@ -1,0 +1,32 @@
+﻿tensorboard_run,event_start_utc,event_start_ist,model_filename,training_description,main_model,mapping_status,notes
+SAC_1,2026-10-19 08:26:28,2026-10-19 13:56:28,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_2,2026-10-19 08:58:26,2026-10-19 14:28:26,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_3,2026-10-19 10:39:42,2026-10-19 16:09:42,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_4,2026-10-19 10:40:46,2026-10-19 16:10:46,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_5,2026-10-19 11:16:36,2026-10-19 16:46:36,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_6,2026-10-19 12:56:32,2026-10-19 18:26:32,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_7,2026-10-19 13:01:30,2026-10-19 18:31:30,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_8,2026-10-19 13:01:39,2026-10-19 18:31:39,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_9,2026-10-19 13:04:04,2026-10-19 18:34:04,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_10,2026-10-19 13:32:54,2026-10-19 19:02:54,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_11,2026-10-19 14:12:14,2026-10-19 19:42:14,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_12,2026-10-19 14:13:33,2026-10-19 19:43:33,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_13,2026-10-19 15:30:21,2026-10-19 21:00:21,,,NO,Unmapped,Earlier TensorBoard run; no unique saved-model link established from this ZIP.
+SAC_14,2026-10-20 19:55:41,2026-10-21 01:25:41,,,NO,Unmapped,"TensorBoard run present, but no unique saved-model link established."
+SAC_15,2026-10-20 20:21:19,2026-10-21 01:51:19,,,NO,Unmapped,"TensorBoard run present, but no unique saved-model link established."
+SAC_16,2026-10-20 20:24:48,2026-10-21 01:54:48,SAC_spec_smoke_run2.zip,Specified smoke run,NO,Exact,
+SAC_17,2026-10-20 20:26:47,2026-10-21 01:56:47,SAC_gen_smoke_run.zip,Generalized smoke run,NO,Exact,
+SAC_18,2026-10-20 21:10:47,2026-10-21 02:40:47,,,NO,Unmapped,"TensorBoard run present, but no unique saved-model link established."
+SAC_19,2026-10-20 21:12:06,2026-10-21 02:42:06,SAC_spec_smoke3.zip,Specified smoke run,NO,Exact,
+SAC_20,2026-10-20 21:14:42,2026-10-21 02:44:42,SAC_generalized_plant_nominal_A0p5-1p5_F150-200_Pm3p14159-3p14159_H2_T10k_seed42.zip,Early generalized 10k run,NO,Exact,
+SAC_21,2026-10-20 21:22:45,2026-10-21 02:52:45,,,NO,Unmapped,"TensorBoard run present, but no unique saved-model link established."
+SAC_22,2026-10-20 21:23:11,2026-10-21 02:53:11,SAC_generalized_10k.zip,"Generalized, short 10k run",NO,Exact,
+SAC_23,2026-10-20 21:24:52,2026-10-21 02:54:52,SAC_generalized_smoke.zip,Generalized smoke run,NO,Exact,
+SAC_24,2026-10-20 21:29:36,2026-10-21 02:59:36,SAC_generalized_plant_1M.zip,"Generalized, 150–200 Hz, 1M",NO,Exact,
+SAC_25,2026-10-21 00:53:57,2026-10-21 06:23:57,SAC_generalized_plant_1M_RedContPen.zip,"Generalized, 150–200 Hz, 1M, reduced control penalty",NO,Exact,
+SAC_26,2026-10-21 03:48:22,2026-10-21 09:18:22,SAC_specified_plant_1M.zip,"Specified, 174 Hz, 1M",YES,Exact,
+SAC_27,2026-10-21 08:20:11,2026-10-21 13:50:11,SAC_generalized_plant_1M_noNoise_incrDispReward.zip,"Generalized, no noise + increased displacement reward, 1M",YES,Exact,
+SAC_28,2026-10-21 14:47:01,2026-10-21 20:17:01,,,NO,Unmapped,Likely interrupted/incomplete run before SAC_29; no saved model confidently linked.
+SAC_29,2026-10-21 15:01:06,2026-10-21 20:31:06,SAC_generalized_plant_nominal_0_150_2s.zip,"Generalized, 0–150 Hz, 500k",NO,Exact,
+SAC_30,2026-10-21 18:31:31,2026-10-22 00:01:31,SAC_specified_plant_1M_0_50Hz.zip,"Generalized, 0–50 Hz, 1M",YES,Exact,
+SAC_31,2026-10-21 21:50:11,2026-10-22 03:20:11,SAC_generalized_plant_1M_0_600Hz.zip,"Generalized, 0–600 Hz, 1M",YES,Exact,

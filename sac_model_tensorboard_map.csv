@@ -1,0 +1,17 @@
+﻿model_filename,tensorboard_run,training_description,main_model,mapping_status,notes
+SAC_generalized_10k.zip,SAC_22,"Generalized, short 10k run",NO,Exact,TensorBoard run starts at essentially the same time as the saved model.
+SAC_generalized_plant_1M.zip,SAC_24,"Generalized, 150–200 Hz, 1M",NO,Exact,Main 150–200 Hz generalized run.
+SAC_generalized_plant_1M_0_600Hz.zip,SAC_31,"Generalized, 0–600 Hz, 1M",YES,Exact,User's main model.
+SAC_generalized_plant_1M_noNoise_incrDispReward.zip,SAC_27,"Generalized, no noise + increased displacement reward, 1M",YES,Exact,User's main model.
+SAC_generalized_plant_1M_RedContPen.zip,SAC_25,"Generalized, 150–200 Hz, 1M, reduced control penalty",NO,Exact,Reduced control-penalty experiment.
+SAC_generalized_plant_nominal_0_150_2s.zip,SAC_29,"Generalized, 0–150 Hz, 500k",NO,Exact,SAC_28 appears to be an interrupted/incomplete run before this saved model.
+SAC_generalized_plant_nominal_A0p5-1p5_F150-200_Pm3p14159-3p14159_H2_T10k_seed42.zip,SAC_20,Early generalized 10k run,NO,Exact,Mapped by TensorBoard start time and saved-model timestamp.
+SAC_generalized_smoke.zip,SAC_23,Generalized smoke run,NO,Exact,Mapped by TensorBoard start time and saved-model timestamp.
+SAC_gen_smoke_run.zip,SAC_17,Generalized smoke run,NO,Exact,Mapped by TensorBoard start time and saved-model timestamp.
+SAC_plant_Smoke_run.zip,,Plant smoke run,NO,Not uniquely identifiable,ZIP contents do not provide enough information to distinguish its TensorBoard run.
+SAC_specified_plant_1M.zip,SAC_26,"Specified, 174 Hz, 1M",YES,Exact,User's main model.
+SAC_specified_plant_1M_0_50Hz.zip,SAC_30,"Generalized, 0–50 Hz, 1M",YES,Exact,"Filename says 'specified', but user confirms this run is generalized."
+SAC_spec_smoke3.zip,SAC_19,Specified smoke run,NO,Exact,Mapped by TensorBoard start time and saved-model timestamp.
+SAC_spec_smoke_run2.zip,SAC_16,Specified smoke run,NO,Exact,Mapped by TensorBoard start time and saved-model timestamp.
+sac_vibration_model.zip,,Older/legacy SAC model,NO,Not uniquely identifiable,No unique TensorBoard mapping established from the supplied ZIP.
+sac_vibration_model_7mode.zip,,Seven-mode SAC model,NO,Not uniquely identifiable,No unique TensorBoard mapping established from the supplied ZIP.
